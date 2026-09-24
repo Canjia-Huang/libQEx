@@ -47,10 +47,13 @@ if (NOT WIN32 )
 
   target_link_libraries(cmdline_tool ${CMDLINE_TOOL_LIBRARIES})
 
+  # Do not pin the language standard here: the C++ standard is set once in the
+  # top-level CMakeLists.txt. Pinning it to c++98 breaks the build because
+  # modern OpenMesh headers require (at least) C++11.
   set_target_properties(cmdline_tool
       PROPERTIES
       INCLUDE_DIRECTORIES "${CMDLINE_TOOL_INCLUDE_DIRS}"
-      COMPILE_FLAGS "-Wall -Wextra -pedantic -std=c++98 -Wno-long-long"
+      COMPILE_FLAGS "-Wall -Wextra -pedantic"
   )
 
 endif()

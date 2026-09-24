@@ -18,7 +18,9 @@
 # along with QEx.  If not, see <http://www.gnu.org/licenses/>.
 #   
 
-cmake_minimum_required (VERSION 2.6)
+# CMake 4 removed compatibility with cmake_minimum_required(VERSION < 3.5),
+# so the old "VERSION 2.6" no longer configures at all.
+cmake_minimum_required (VERSION 3.10)
 
 # Only set project name if not build from within another project.
 if("${PROJECT_NAME}" STREQUAL "")
@@ -27,7 +29,28 @@ endif()
 
 list (APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
+#
+# OpenMesh 8 and newer require at least C++11; OpenMesh 11 (the version
+# shipped by current Homebrew/macOS package managers) uses C++17 constructs
+# in its headers and cannot be compiled in C++98 mode.
+#
+set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD_REQUIRED ON)
+set (CMAKE_CXX_EXTENSIONS OFF)
+
 find_package (OpenMesh REQUIRED)
+
+#
+# On macOS, Homebrew's OpenMeshTools library refers to OpenMeshCore through
+# @rpath. Without an explicit runtime search path the build succeeds but the
+# resulting binaries fail at startup with
+#   Library not loaded: @rpath/libOpenMeshCore.*.dylib
+#
+if (APPLE AND OPENMESH_LIBRARY_DIRS)
+    set (CMAKE_BUILD_RPATH "${OPENMESH_LIBRARY_DIRS}")
+    set (CMAKE_INSTALL_RPATH "${OPENMESH_LIBRARY_DIRS}")
+    set (CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif ()
 
 set (SOURCES "")
 set (INCLUDE_DIRS "")
@@ -64,11 +87,23 @@ target_link_libraries (QExStatic ${LIBRARIES})
 # forcing the generation of SSE code ensures that the
 # exact predicates produce correct results.
 #
+# These flags only exist (and are only accepted by the compiler) on x86. On
+# other architectures - e.g. arm64/Apple Silicon - there are no x87 extended
+# precision registers at all, so nothing has to be forced and the exact
+# predicates are safe with the default code generation.
+#
+set (QEX_ARCH_FP_FLAGS "")
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i[3-6]86)$")
+    set (QEX_ARCH_FP_FLAGS "-msse -mfpmath=sse")
+endif ()
+
 set (QEX_COMPILE_FLAGS "-Wall")
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-    set (QEX_COMPILE_FLAGS "${QEX_COMPILE_FLAGS} -msse -mfpmath=sse -pedantic -Weverything")
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+    set (QEX_COMPILE_FLAGS "${QEX_COMPILE_FLAGS} ${QEX_ARCH_FP_FLAGS} -pedantic -Wextra")
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+    set (QEX_COMPILE_FLAGS "${QEX_COMPILE_FLAGS} ${QEX_ARCH_FP_FLAGS} -pedantic -Weverything")
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-    set (QEX_COMPILE_FLAGS "${QEX_COMPILE_FLAGS} -msse -mfpmath=sse -pedantic -Wextra")
+    set (QEX_COMPILE_FLAGS "${QEX_COMPILE_FLAGS} ${QEX_ARCH_FP_FLAGS} -pedantic -Wextra")
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Intel")
     message (WARNING
         "You are using an Intel compiler which might generate x87 FPU code "

@@ -1,14 +1,28 @@
 libQEx uses the cmake build system.
 
-libQEx depends on OpenMesh. If you don't have a copy of OpenMesh yet, get it at
-http://openmesh.org/. libQEx depends on version 3 of OpenMesh. As of this
-writing you have to build OpenMesh from the svn trunk as version 3 is not yet
-available in a pre-packaged form.
+Dependencies
+------------
 
-If you want to build the unit tests, you also need the googletest framework.
-You can get it at http://code.google.com/p/googletest/.
+libQEx depends on OpenMesh (http://openmesh.org/). Any OpenMesh version from 3
+onwards works; because the OpenMesh headers are compiled in C++17 mode (see
+below), current releases such as OpenMesh 11 are fine. On macOS, OpenMesh is
+available from Homebrew:
 
-Building libQEx involves the following steps:
+    brew install open-mesh
+
+The sources are built as C++17. The top-level CMakeLists.txt sets
+CMAKE_CXX_STANDARD accordingly - QEx itself and modern OpenMesh headers both
+compile cleanly in that mode, while the C++98 mode used historically does not.
+CMake 3.10 or newer is required (CMake 4.x rejects the historic
+"cmake_minimum_required(VERSION 2.6)").
+
+If you want to build the unit tests, you additionally need the googletest
+sources and pass their location via -D GTEST_DIR. Homebrew does not install
+googletest sources, so a checkout of
+https://github.com/google/googletest is the simplest way to get them.
+
+Building libQEx
+---------------
 
 # Clone libQEx
 git clone https://github.com/hcebke/libQEx.git libQEx
@@ -18,19 +32,22 @@ cd libQEx
 mkdir build
 cd build
 
-# Initialize the build directory
-cmake -D OPENMESH_INCLUDE_DIR=/path/to/OpenMesh/src \
-    -D OPENMESH_LIBRARY_DIR=/path/to/OpenMesh/binaries ..
+# Initialize the build directory. OpenMesh is found automatically when it is
+# installed in a standard location, including Homebrew's /opt/homebrew
+# (Apple Silicon) and /usr/local (Intel) prefixes.
+cmake ..
+
+# If OpenMesh lives somewhere unusual, point CMake at it explicitly:
+cmake -D OPENMESH_INCLUDE_DIR=/path/to/OpenMesh/include \
+    -D OPENMESH_LIBRARY_DIR=/path/to/OpenMesh/lib ..
 
 # Alternatively, initialize the build directory, including the unit tests
-cmake -D OPENMESH_INCLUDE_DIR=/path/to/OpenMesh/src \
-    -D OPENMESH_LIBRARY_DIR=/path/to/OpenMesh/binaries \
-    -D BUILD_UNIT_TESTS=true -D GTEST_DIR=/path/to/googletest ..
+cmake -D BUILD_UNIT_TESTS=true -D GTEST_DIR=/path/to/googletest ..
 
 # Build
 make
 
-# Build the documentation
+# Build the documentation (requires Doxygen)
 make qex_doc
 
 # If you have built the unit tests, execute them

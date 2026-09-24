@@ -40,6 +40,12 @@ FIND_PATH(OPENMESH_INCLUDE_DIR OpenMesh/Core/Mesh/PolyMeshT.hh
                 "${CMAKE_SOURCE_DIR}/../OpenMesh/src"
                 /ACG/acgdev/gcc-4.0-x86_64/OM2/OpenMesh-2.0/installed/include
 		    "C:\\Program Files\\OpenMesh 2.0\\include"
+                # Homebrew: /opt/homebrew on Apple Silicon, /usr/local on Intel.
+                /opt/homebrew/include
+                /opt/homebrew/opt/open-mesh/include
+                /usr/local/opt/open-mesh/include
+                # MacPorts
+                /opt/local/include
                 )
 SET(OPENMESH_LIBRARY_DIR NOTFOUND CACHE PATH "The directory where the OpenMesh libraries can be found.")
 SET(SEARCH_PATHS
@@ -56,5 +62,8 @@ FIND_PACKAGE_HANDLE_STANDARD_ARGS(OpenMesh DEFAULT_MSG OPENMESH_CORE_LIBRARY OPE
 IF (OPENMESH_FOUND)
    SET(OPENMESH_LIBRARIES "${OPENMESH_CORE_LIBRARY}" "${OPENMESH_TOOLS_LIBRARY}")
    SET(OPENMESH_INCLUDE_DIRS "${OPENMESH_INCLUDE_DIR}")
+   # The directory the libraries were actually found in. Needed e.g. to set up
+   # the runtime search path on macOS.
+   GET_FILENAME_COMPONENT(OPENMESH_LIBRARY_DIRS "${OPENMESH_CORE_LIBRARY}" DIRECTORY)
 ENDIF (OPENMESH_FOUND)
 
