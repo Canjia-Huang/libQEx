@@ -1,6 +1,10 @@
 libQEx – A Robust Quad Mesh Extractor
 ======
 
+| Input (tri) | Output (quad) | Output (poly) |
+| :---: | :---: | :---: |
+| <img src="./assets/input.png"> | <img src="./assets/quad.png"> | <img src="./assets/poly.png"> |
+
 ## Changes compared to the original libQEx
 
 This is a fork of the original `libQEx`: the extraction algorithm itself is untouched,
