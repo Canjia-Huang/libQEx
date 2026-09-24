@@ -354,6 +354,7 @@ bool GeogramBridge::save(const GEO::Mesh &mesh, const std::string &filename) {
 bool GeogramBridge::saveRefinedMesh(const SurfaceLayout &layout, const std::string &filename) {
     GEO::Mesh mesh;
     toRefinedMesh(layout, mesh);
+    mesh.facets.connect();
     return save(mesh, filename);
 }
 
