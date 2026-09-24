@@ -47,14 +47,34 @@ don't care about the details and just need results.
 
 ## Building and using the `qex` command line application
 
-`libQEx` builds with CMake (C++17). Optional dependencies are picked up
-automatically (macOS: Homebrew's OpenMesh, a geogram source tree in `~/geogram`):
+`libQEx` builds with CMake (C++17):
 
 ```bash
-git clone --recurse-submodules <this repository>   # CLI11 lives in third_party/CLI11
+git clone --recurse-submodules <this repository>
 cmake -S . -B build
 cmake --build build
 ```
+
+`--recurse-submodules` matters: **OpenMesh** (`third_party/OpenMesh`, pinned to the
+`OpenMesh-11.0` tag, including its own `cmake-library` submodule) and **CLI11**
+(`third_party/CLI11`) are git submodules and are built automatically - no separate
+installation of OpenMesh is needed. If you cloned without it, run
+
+```bash
+git submodule update --init --recursive
+```
+
+A system installation of OpenMesh is still supported as a fallback, and can be
+forced:
+
+```bash
+cmake -S . -B build -DQEX_OPENMESH=SYSTEM      # use an installed OpenMesh (e.g. brew install open-mesh)
+cmake -S . -B build -DQEX_OPENMESH=SUBMODULE   # require the bundled one (default: AUTO)
+```
+
+Everything else is optional: `geogram` (for `--out-poly`) is picked up
+automatically from `~/geogram` or an installation, and can be pointed at
+explicitly with `-DGEOGRAM_ROOT=<path>` or disabled with `-DQEX_WITH_GEOGRAM=OFF`.
 
 All executables end up in `build/bin`, all libraries in `build/lib`. The main
 application is `qex`:
@@ -67,12 +87,12 @@ build/bin/qex --in <input.obj> --out <output.obj> [-v|--valences <file.vval>] [-
 derived from the input mesh (`<input>_quad.obj`, `<input>_poly.geogram`).
 
 It extracts a quad mesh from a triangle mesh whose per-halfedge UVs form a
-(relaxed) integer grid map and writes it to the file given by `--out`. `--out-poly <file>`
-additionally stores the *polygonal* mesh - the triangle mesh cut along all quad
-edge polylines, i.e. the quad layout as a subdivision of the triangle mesh - in
-geogram's mesh format, with *all* information (the quad face <-> triangle face
-correspondence, the quad edge polylines, per edge/vertex/facet labels) kept in
-mesh attributes.
+(relaxed) integer grid map and writes it to the file given by `--out`.
+`--out-poly <file>` additionally stores the *polygonal* mesh - the triangle mesh
+cut along all quad edge polylines, i.e. the quad layout as a subdivision of the
+triangle mesh - in geogram's mesh format, with *all* information (the quad face
+<-> triangle face correspondence, the quad edge polylines, per edge/vertex/facet
+labels) kept in mesh attributes.
 
 Run `build/bin/qex --help` for the details. The `demo/` directory contains small
 standalone tools that additionally write the layout as OBJ/text files.

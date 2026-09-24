@@ -54,7 +54,51 @@ foreach (config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config} "${QEX_LIB_DIR}")
 endforeach ()
 
-find_package (OpenMesh REQUIRED)
+#
+# OpenMesh: it is shipped as a git submodule in third_party/, so a fresh clone
+# (with --recurse-submodules) builds it automatically. A system installation is
+# used as a fallback.
+#
+set (QEX_OPENMESH "AUTO" CACHE STRING
+    "Where OpenMesh comes from: AUTO (third_party/OpenMesh if present, else a system installation), SUBMODULE or SYSTEM.")
+
+set (QEX_OPENMESH_SUBMODULE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenMesh")
+
+if (NOT QEX_OPENMESH STREQUAL "SYSTEM" AND EXISTS "${QEX_OPENMESH_SUBMODULE_DIR}/CMakeLists.txt")
+    #
+    # Build the bundled OpenMesh. Its CMakeLists is made for this: when it is not
+    # the top level project it skips its unit tests and exports
+    # OPENMESH_FOUND / OPENMESH_LIBRARIES / OPENMESH_INCLUDE_DIRS into this scope.
+    #
+    if (NOT EXISTS "${QEX_OPENMESH_SUBMODULE_DIR}/cmake-library/VCI/VCICommon.cmake")
+        message (FATAL_ERROR
+            "third_party/OpenMesh is present but its nested submodule cmake-library is "
+            "missing. Run: git submodule update --init --recursive")
+    endif ()
+    set (BUILD_APPS OFF CACHE BOOL "Enable or disable building of apps" FORCE)
+    set (OPENMESH_DOCS OFF CACHE BOOL "Enable or disable building of documentation" FORCE)
+    # suppress the developer warnings OpenMesh's own cmake modules emit
+    set (CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
+    add_subdirectory (third_party/OpenMesh EXCLUDE_FROM_ALL)
+    unset (CMAKE_SUPPRESS_DEVELOPER_WARNINGS)
+    #
+    # Link the shared variants (OpenMeshCore / OpenMeshTools): OpenMesh's mesh IO
+    # modules register themselves through static initialisers, which a static
+    # archive would drop (the well known "No reading modules available!" runtime
+    # error).
+    #
+    set (OPENMESH_LIBRARIES OpenMeshCore OpenMeshTools)
+    set (OPENMESH_INCLUDE_DIRS "${QEX_OPENMESH_SUBMODULE_DIR}/src")
+    set (OPENMESH_LIBRARY_DIRS "${QEX_LIB_DIR}")
+    message (STATUS "Using the bundled OpenMesh (${QEX_OPENMESH_SUBMODULE_DIR}).")
+else ()
+    if (QEX_OPENMESH STREQUAL "SUBMODULE")
+        message (FATAL_ERROR
+            "QEX_OPENMESH=SUBMODULE but third_party/OpenMesh is missing. "
+            "Run: git submodule update --init --recursive")
+    endif ()
+    find_package (OpenMesh REQUIRED)
+endif ()
 
 #
 # On macOS, Homebrew's OpenMeshTools library refers to OpenMeshCore through
@@ -62,9 +106,11 @@ find_package (OpenMesh REQUIRED)
 # resulting binaries fail at startup with
 #   Library not loaded: @rpath/libOpenMeshCore.*.dylib
 #
-if (APPLE AND OPENMESH_LIBRARY_DIRS)
-    set (CMAKE_BUILD_RPATH "${OPENMESH_LIBRARY_DIRS}")
-    set (CMAKE_INSTALL_RPATH "${OPENMESH_LIBRARY_DIRS}")
+if (APPLE)
+    if (OPENMESH_LIBRARY_DIRS)
+        set (CMAKE_BUILD_RPATH "${OPENMESH_LIBRARY_DIRS}")
+        set (CMAKE_INSTALL_RPATH "${OPENMESH_LIBRARY_DIRS}")
+    endif ()
     set (CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif ()
 

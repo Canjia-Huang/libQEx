@@ -179,6 +179,19 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 
 **踩坑**：geogram 的 `.geogram` 写出器会查询 `sys:compression_level`，而该变量只在 `CmdLine::import_arg_group("standard")` 之后才存在，否则 `geo_assert(variable_exists)` 直接 abort（带 stacktrace）。因此 `GeogramBridge::initialize()` 里除了 `GEO::initialize()` 还要 `GEO::CmdLine::import_arg_group("standard")`。
 
+## 9b. 依赖：OpenMesh 改为 git submodule
+
+- `third_party/OpenMesh` = **https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git**，pin 在 tag **`OpenMesh-11.0`**（与本机 Homebrew 的 11.0.0 一致；注意 GitHub 上的 `OpenMesh/OpenMesh` 已不存在，官方仓库在 RWTH 的 GitLab，端口 9000）。
+- OpenMesh 自己还有一个嵌套 submodule `cmake-library`（`../../cmake/cmake-library`）——**必须递归初始化**，否则配置直接报错（本仓库的 CMake 里有明确提示）。所以克隆用
+  `git clone --recurse-submodules ...`，或事后 `git submodule update --init --recursive`。
+- 根 `CMakeLists.txt` 新增开关 `QEX_OPENMESH` = `AUTO`（默认：有 submodule 就用它，否则退回系统安装）/ `SUBMODULE`（强制，缺失即 FATAL_ERROR）/ `SYSTEM`（强制用 `find_package(OpenMesh)`，`cmake/FindOpenMesh.cmake` 保持不变）。
+- 走 submodule 时：`set(BUILD_APPS OFF)`、`set(OPENMESH_DOCS OFF)`，用 `add_subdirectory(third_party/OpenMesh EXCLUDE_FROM_ALL)`；OpenMesh 的 CMake 本身支持作为子项目（非顶层时会跳过 Unittests，并把 `OPENMESH_FOUND / OPENMESH_LIBRARIES / OPENMESH_INCLUDE_DIRS` 以 `PARENT_SCOPE` 导出），所以仓库其余部分不用改。同时用 `CMAKE_SUPPRESS_DEVELOPER_WARNINGS` 临时屏蔽 OpenMesh 自己 cmake 模块的 dev warning。
+- **坑（重要）**：不要链接 `OpenMeshCoreStatic`/`OpenMeshToolsStatic`。OpenMesh 的 mesh IO（OBJ 读写）模块是靠静态初始化自注册的，静态库归档里没人引用的目标文件会被链接器丢掉，运行时报
+  `[OpenMesh::IO::_IOManager_] No reading modules available!` 且读 OBJ 直接失败。正确做法是链接**共享库** `OpenMeshCore`/`OpenMeshTools`（它们的 install_name 是 `@rpath/libOpenMeshCore.11.0.dylib`），并把 `${QEX_LIB_DIR}`（构建目录的 `lib/`，OpenMesh 的库就落在那里）加进 `CMAKE_BUILD_RPATH`/`CMAKE_INSTALL_RPATH`（APPLE 分支已处理）。改用共享库后顺带也消除了重复静态库的链接警告。
+- 实测：全新 build 目录 `cmake -S . -B /tmp/x && cmake --build /tmp/x -j8` 自动编译 bundled OpenMesh 并产出 `bin/{qex,cmdline_tool,export_layout,export_geogram,demo_minimal_c}`；`qex --in duck_miq_8_param.obj --out t.obj --out-poly t_poly.geogram` 输出与 Homebrew 版**字节数完全一致**（18573 / 761528）；`-DQEX_OPENMESH=SYSTEM` 仍解析到 `/opt/homebrew/lib/libOpenMeshCore.dylib`。
+
+---
+
 ## 10. `qex` 命令行程序（CLI11）
 
 ### CLI11 submodule
@@ -248,6 +261,6 @@ set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY  "${QEX_LIB_DIR}")   # 静态库     → lib
 
 实测 `<build>/bin/`：`qex`、`cmdline_tool`、`export_layout`、`export_geogram`、`demo_minimal_c`；`<build>/lib/`：`libQEx.dylib`、`libQExStatic.a`、`libQExGeogram.dylib`、`libQExGeogramStatic.a`。
 
-## 9. 备注
+## 11. 备注
 
 - 本会话 Hindsight 记忆库返回 401（未配置 API key），故以上结论均来自源码阅读 + 本机实测，未写入记忆。
