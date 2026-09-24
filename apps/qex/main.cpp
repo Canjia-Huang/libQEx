@@ -97,11 +97,11 @@ int main(int argc, char **argv) {
             "Vertex valences in VVAL format (optional, helps in ambiguous cases)")
             ->check(CLI::ExistingFile);
 #ifdef QEX_HAVE_GEOGRAM
-    app.add_option("--out-poly,--o-ploy", polyFile,
+    app.add_option("--out-poly,--o-poly", polyFile,
             "Store the polygonal mesh (the quad layout as a subdivision of the triangle mesh) "
             "in this file, in geogram's mesh format with all information in mesh attributes");
 #else
-    app.add_option_function<std::string>("--out-poly,--o-ploy", [](const std::string &) {
+    app.add_option_function<std::string>("--out-poly,--o-poly", [](const std::string &) {
             throw CLI::RuntimeError(
                     "QEx was built without geogram support (configure with -DGEOGRAM_ROOT=... or "
                     "-DQEX_WITH_GEOGRAM=ON)", 1);
