@@ -310,8 +310,30 @@ typename QuadExtractorPostprocT<MeshT>::FH QuadExtractorPostprocT<MeshT>::create
     if (!fh.is_valid()) return fh;
 
     /*
-     * TODO: Transfer Local UV property.
+     * Transfer the Local UV property onto the new face: every halfedge of the
+     * new face belongs to that corner of newFaceVertices whose vertex it points
+     * to.
      */
+    for (typename MeshT::HalfedgeHandle h = mesh_.halfedge_handle(fh), h0 = h; ; ) {
+        const VH to = mesh_.to_vertex_handle(h);
+        bool found = false;
+        for (typename std::vector<std::pair<VH, Vec2i> >::const_iterator it = newFaceVertices.begin();
+                it != newFaceVertices.end(); ++it) {
+            if (it->first == to) {
+                localUvsProp[h] = it->second;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+#ifndef NDEBUG
+            std::cerr << "create_face: no local uv found for vertex " << to.idx() << std::endl;
+#endif
+            localUvsProp[h] = Vec2i(0, 0);
+        }
+        h = mesh_.next_halfedge_handle(h);
+        if (h == h0) break;
+    }
 
 #ifndef NDEBUG
     if (newFaceVertices.size() != 4)

@@ -44,6 +44,56 @@
 namespace QEx {
 
 namespace {
+/**
+ * @brief Intersect the line through [a,b] with the segment [c,d].
+ *
+ * The caller has to make sure that the two really intersect; the segment
+ * parameter is clamped into [0,1] so that the returned point is guaranteed to
+ * lie on the segment. Degenerate (collinear) configurations fall back to an
+ * endpoint of the segment that lies on the line.
+ */
+inline bool intersect_line_with_segment(const Point_2 &a, const Point_2 &b,
+        const Point_2 &c, const Point_2 &d, Point_2 &out) {
+    const double rx = b[0] - a[0], ry = b[1] - a[1];
+    const double sx = d[0] - c[0], sy = d[1] - c[1];
+    const double denom = rx * sy - ry * sx;
+    const double qpx = c[0] - a[0], qpy = c[1] - a[1];
+
+    if (denom != 0.0) {
+        const double t = (qpx * sy - qpy * sx) / denom;
+        double u = (qpx * ry - qpy * rx) / denom;
+        if (u >= -1e-9 && u <= 1.0 + 1e-9) {
+            if (u < 0.0) u = 0.0;
+            else if (u > 1.0) u = 1.0;
+            out = Point_2(a[0] + t * rx, a[1] + t * ry);
+            return true;
+        }
+    }
+
+    /* Degenerate / collinear: take whichever endpoint of [c,d] lies on the line. */
+    Segment_2 line_segment(a, b);
+    if (line_segment.has_on(c)) { out = c; return true; }
+    if (line_segment.has_on(d)) { out = d; return true; }
+
+    /* Last resort: the midpoint of the segment. */
+    out = Point_2((c[0] + d[0]) * 0.5, (c[1] + d[1]) * 0.5);
+    return false;
+}
+
+/**
+ * @brief The uv segment of the i-th halfedge of a triangle, where i = 0,1,2
+ *        refers to the halfedge (heh0,heh1,heh2), i.e. the halfedge whose
+ *        to-vertex carries uv[i].
+ */
+inline void triangle_halfedge_segment(const Point_2 &uv0, const Point_2 &uv1, const Point_2 &uv2,
+        int i, Point_2 &a, Point_2 &b) {
+    switch (i) {
+        case 0: a = uv2; b = uv0; break;
+        case 1: a = uv0; b = uv1; break;
+        default: a = uv1; b = uv2; break;
+    }
+}
+
 #ifndef NDEBUG
 template<class TMeshT>
 class GVPointerEquality {
@@ -148,11 +198,21 @@ void MeshExtractorT<TMeshT>::extract(std::vector<double>& _uv_coords,
     // --------------------------------------------------------
     // 5. generate quadmesh-vertices (and local edge information)
     // --------------------------------------------------------
+    /*
+     * Keep the preprocessed uv coordinates and the embedding around: the layout
+     * (Q-edge polylines and the subdivision of the triangle mesh along them) is
+     * reconstructed later on from the recorded traces, and it has to use
+     * exactly the same uvs and the same embedding.
+     */
+    uv_coords_ = uv_coords;
+    use_original_embedding_ = !decimated;
+
     if (decimated) {
+        embedding_points_.swap(he_points);
         generate_vertices(
                 uv_coords,
                 _external_valences ? &external_valences : 0,
-                HeVectorEmbedding<TMeshT>(he_points));
+                HeVectorEmbedding<TMeshT>(embedding_points_));
     } else {
         generate_vertices(
                 uv_coords,
@@ -1496,7 +1556,8 @@ generate_connections(std::vector<double>& _uv_coords)
       if(gvertices_[i].local_edges[j].isUnconnected() && gvertices_[i].local_edges[j].fh_from.is_valid())
       {
         // find path via tracing
-        FindPathResult target = find_path(gvertices_[i], gvertices_[i].local_edges[j], _uv_coords);
+        FindPathResult target = find_path(gvertices_[i], gvertices_[i].local_edges[j], _uv_coords,
+                &gvertices_[i].local_edges[j].path);
 
                 // store result
         target.applyToLocalEdgeInfo(gvertices_[i].local_edges[j]);
@@ -1510,7 +1571,7 @@ generate_connections(std::vector<double>& _uv_coords)
         {
 #if !defined(NDEBUG) && DEBUG_VERBOSITY >= 2
           // search reverse connection
-          FindPathResult target2 = find_path(gvertices_[target.connected_to_idx], gvertices_[target.connected_to_idx].local_edges[target.orientation_idx], _uv_coords);
+          FindPathResult target2 = find_path(gvertices_[target.connected_to_idx], gvertices_[target.connected_to_idx].local_edges[target.orientation_idx], _uv_coords, 0);
           if(target2.connected_to_idx != (int)i || target2.orientation_idx != (int)j)
           {
             std::cerr << "ERROR: found invalid connection which does not have a reverse..." << std::endl;
@@ -1682,7 +1743,8 @@ check_connections()
 template<class TMeshT>
 typename MeshExtractorT<TMeshT>::FindPathResult
 MeshExtractorT<TMeshT>::
-find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& _uv_coords)
+find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& _uv_coords,
+        std::vector<PathStep> *out_path)
 {
 #if DEBUG
   std::stringstream debug_ss;
@@ -1725,6 +1787,13 @@ find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& 
   BOUNDEDNESS bs = tri.boundedness(uv_to);
   if(bs == BND_ON_BOUNDED_SIDE || bs == BND_ON_BOUNDARY)
   {
+    /*
+     * The whole edge lies within the starting triangle, so the polyline is a
+     * single straight piece.
+     */
+    if (out_path)
+        out_path->push_back(PathStep(cur_fh, HEH(-1), uv_from, uv_to));
+
     return find_local_connection(uv_from, uv_original_from, uv_to, tri, heh0, heh1, heh2, bs, accumulated_tf, _uv_coords);
   }
   else // endpoint not within triangle -> do first step
@@ -1840,10 +1909,31 @@ find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& 
     // ran into degeneracy
     return FindPathResult::Signal(LocalEdgeInfo::LECI_Traced_Into_Degeneracy);
   }
+
+  /*
+   * The entry point of the current piece of the polyline, expressed in the uv
+   * frame of the current triangle. For the very first piece this is simply the
+   * start point of the edge; afterwards it is the exit point of the previous
+   * piece, transformed into the new frame.
+   */
+  Point_2 path_entry = uv_from;
+
+  if (out_path) {
+    const int exit_idx = (cur_heh == heh0) ? 0 : ((cur_heh == heh1) ? 1 : 2);
+    Point_2 ea, eb;
+    triangle_halfedge_segment(uv0, uv1, uv2, exit_idx, ea, eb);
+    Point_2 exit_uv;
+    intersect_line_with_segment(uv_from, uv_to, ea, eb, exit_uv);
+    out_path->push_back(PathStep(cur_fh, cur_heh, path_entry, exit_uv));
+    path_entry = exit_uv;
+  }
+
   TF tf = transition(cur_heh);
   tf.transform_point(uv_from);
   tf.transform_point(uv_original_from);
   tf.transform_point(uv_to);
+  if (out_path)
+      tf.transform_point(path_entry);
   accumulated_tf = tf * accumulated_tf;
   cur_heh = tri_mesh_.opposite_halfedge_handle(cur_heh);
 
@@ -1936,6 +2026,13 @@ find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& 
     const BOUNDEDNESS bs = tri.boundedness(uv_to);
     if (bs == BND_ON_BOUNDED_SIDE  || bs == BND_ON_BOUNDARY)
     {
+      /*
+       * Last piece of the polyline: from wherever we entered this triangle to
+       * the endpoint of the edge.
+       */
+      if (out_path)
+          out_path->push_back(PathStep(cur_fh, HEH(-1), path_entry, uv_to));
+
 #ifndef NDEBUG
       const FindPathResult res =
               find_local_connection(uv_from, uv_original_from, uv_to, tri, heh0, heh1, heh2, bs, accumulated_tf, _uv_coords);
@@ -2096,9 +2193,20 @@ find_path(const GridVertex& _gv, const LocalEdgeInfo& lei, std::vector<double>& 
 #endif
 
       TF tf = transition(heh_upd);
+      if (out_path) {
+          const int exit_idx = (heh_upd == heh0) ? 0 : ((heh_upd == heh1) ? 1 : 2);
+          Point_2 ea, eb;
+          triangle_halfedge_segment(uv0, uv1, uv2, exit_idx, ea, eb);
+          Point_2 exit_uv;
+          intersect_line_with_segment(uv_from, uv_to, ea, eb, exit_uv);
+          out_path->push_back(PathStep(cur_fh, heh_upd, path_entry, exit_uv));
+          path_entry = exit_uv;
+      }
       tf.transform_point(uv_from);
       tf.transform_point(uv_original_from);
       tf.transform_point(uv_to);
+      if (out_path)
+          tf.transform_point(path_entry);
       accumulated_tf = tf * accumulated_tf;
       cur_heh = tri_mesh_.opposite_halfedge_handle(heh_upd);
     }
@@ -2878,6 +2986,7 @@ generate_faces_and_store_quadmesh(PolyMeshT& _quad_mesh,
   //count number of unwanted holes and print information
   int n_undesired_holes(0);
   int n_desired_holes(0);
+  /* remember them: the layout builder reports the correspondence relative to them */
   int n_isolated_vertices_removed(0);
   std::set<typename PolyMeshT::VertexHandle> visited;
   typename PolyMeshT::VertexIter v_it  = _quad_mesh.vertices_sbegin();
@@ -2956,6 +3065,9 @@ generate_faces_and_store_quadmesh(PolyMeshT& _quad_mesh,
       if(_quad_mesh.status(*v_it).tagged())
         _quad_mesh.status(*v_it).set_feature(true);
   }
+
+  n_desired_holes_ = n_desired_holes;
+  n_undesired_holes_ = n_undesired_holes;
 
   _quad_mesh.update_normals();
 #ifndef NDEBUG

@@ -62,6 +62,181 @@ void mergePolyToQuad(QuadMesh_t inout_polyMesh, QEx::PropMgr<QuadMesh>::LocalUvs
     inout_polyMesh->release_edge_status();
     inout_polyMesh->release_vertex_status();
 }
+
+void extractQuadMeshWithLayout(TriMesh_t in_triMesh, const_UVVector_t in_uvs,
+                               const_ValenceVector_t in_vertexValences,
+                               QuadMesh_t out_quadMesh, QEx::SurfaceLayout *out_layout,
+                               QuadMesh_t out_refinedMesh, bool in_mergeToQuads) {
+
+    /*
+     * Convert UV representation.
+     */
+    std::vector<double> uvs; uvs.reserve(in_uvs->size() * 2);
+    for (std::vector<OpenMesh::Vec2d>::const_iterator it = in_uvs->begin(), it_end = in_uvs->end();
+            it_end != it; ++it) {
+        uvs.push_back((*it)[0]);
+        uvs.push_back((*it)[1]);
+    }
+
+    out_quadMesh->request_face_status();
+    out_quadMesh->request_halfedge_status();
+    out_quadMesh->request_edge_status();
+    out_quadMesh->request_vertex_status();
+
+    QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager heLocalUvProp(
+            *out_quadMesh, QEx::QExGlobals::LOCAL_UVS_HANDLE_NAME());
+
+    QEx::MeshExtractorT<TriMesh> qme(*in_triMesh);
+
+    QuadMesh fallbackRefinedMesh;
+    if (out_refinedMesh) {
+        out_refinedMesh->clear();
+        out_refinedMesh->request_face_status();
+        out_refinedMesh->request_vertex_status();
+    }
+
+    typename QEx::MeshExtractorT<TriMesh>::Layout layout;
+    qme.extract_with_layout<QuadMesh, QuadMesh>(uvs, heLocalUvProp, *out_quadMesh,
+            out_refinedMesh ? *out_refinedMesh : fallbackRefinedMesh, layout, in_vertexValences);
+
+    if (out_layout) {
+        SurfaceLayout &l = *out_layout;
+        l = SurfaceLayout();
+
+        l.vertex_position = layout.vertex_position;
+        l.vertex_kind = layout.vertex_kind;
+        l.vertex_tri_vertex = layout.vertex_tri_vertex;
+        l.vertex_tri_edge = layout.vertex_tri_edge;
+        l.vertex_grid_vertex = layout.vertex_grid_vertex;
+        l.face_vertices = layout.face_vertices;
+        l.face_tri_face = layout.face_tri_face;
+        l.face_cell = layout.face_cell;
+        l.face_edge_quad_edge = layout.face_edge_quad_edge;
+
+        l.n_poly_faces = layout.n_poly_faces;
+        l.n_cells = layout.n_cells;
+        l.cell_poly_face = layout.cell_poly_face;
+        l.cell_tri_faces = layout.cell_tri_faces;
+        l.cell_quad_edges = layout.cell_quad_edges;
+        l.cell_vertices = layout.cell_vertices;
+
+        l.n_degenerate_triangles = layout.n_degenerate_triangles;
+        l.n_unresolved_segments = layout.n_unresolved_segments;
+        l.n_cell_poly_face_conflicts = layout.n_cell_poly_face_conflicts;
+        l.n_failed_refined_faces = layout.n_failed_refined_faces;
+        l.n_pruned_pieces = layout.n_pruned_pieces;
+        l.n_degenerate_quad_edges = layout.n_degenerate_quad_edges;
+        l.n_degenerate_pieces = layout.n_degenerate_pieces;
+        l.n_collapsed_quad_edges = layout.n_collapsed_quad_edges;
+        l.n_coincident_quad_edges = layout.n_coincident_quad_edges;
+        l.n_cells_without_poly_face = layout.n_cells_without_poly_face;
+        l.n_poly_faces_without_cell = layout.n_poly_faces_without_cell;
+        l.n_desired_holes = layout.n_desired_holes;
+        l.n_undesired_holes = layout.n_undesired_holes;
+
+        l.quad_edges.resize(layout.quad_edges.size());
+        for (size_t i = 0; i < layout.quad_edges.size(); ++i) {
+            const typename QEx::MeshExtractorT<TriMesh>::QuadEdge &src = layout.quad_edges[i];
+            SurfaceLayout::QuadEdge &dst = l.quad_edges[i];
+            dst.gv_a = src.gv_a;
+            dst.gv_b = src.gv_b;
+            dst.poly_face_a = src.poly_face_a;
+            dst.poly_face_b = src.poly_face_b;
+            dst.poly_halfedge_a = src.poly_halfedge_a;
+            dst.poly_halfedge_b = src.poly_halfedge_b;
+            dst.cell_left = src.cell_left;
+            dst.cell_right = src.cell_right;
+            dst.vertices = src.step_vertices;
+            dst.points.reserve(src.step_vertices.size());
+            for (size_t k = 0; k < src.step_vertices.size(); ++k) {
+                const int v = src.step_vertices[k];
+                if (v >= 0 && (size_t)v < layout.vertex_position.size())
+                    dst.points.push_back(layout.vertex_position[v]);
+            }
+            dst.pieces.reserve(src.steps.size());
+            for (size_t k = 0; k < src.steps.size(); ++k) {
+                SurfaceLayout::Piece piece;
+                piece.tri_face = src.steps[k].fh.idx();
+                piece.uv_in = OpenMesh::Vec2d(src.steps[k].uv_in[0], src.steps[k].uv_in[1]);
+                piece.uv_out = OpenMesh::Vec2d(src.steps[k].uv_out[0], src.steps[k].uv_out[1]);
+                dst.pieces.push_back(piece);
+            }
+        }
+    }
+
+    if (in_mergeToQuads) {
+        /*
+         * The merging step collapses degenerate (zero length) grid edges, so the
+         * final quad mesh has one face per cell as well - but its face indices
+         * differ from the poly mesh's ones. The local uvs survive the merging
+         * (in the same chart frame), so the faces can be matched by their set of
+         * distinct corner lattice coordinates.
+         */
+        typedef std::vector<std::pair<int, int> > UvSet;
+        /* several faces can share the same set of corner lattice coordinates (e.g.
+         * when a face was built with "double edges"), so keep all candidates and
+         * hand them out one by one */
+        std::map<UvSet, std::vector<int> > faces_of_uv_set;
+
+        std::vector<UvSet> poly_face_uv_set(out_quadMesh->n_faces());
+        for (QuadMesh::FaceIter f = out_quadMesh->faces_begin(), f_end = out_quadMesh->faces_end();
+                f != f_end; ++f) {
+            UvSet s;
+            for (QuadMesh::HalfedgeHandle h = out_quadMesh->halfedge_handle(*f), h0 = h; ; ) {
+                const Vec2i &uv = heLocalUvProp[h];
+                s.push_back(std::make_pair((int)uv[0], (int)uv[1]));
+                h = out_quadMesh->next_halfedge_handle(h);
+                if (h == h0) break;
+            }
+            std::sort(s.begin(), s.end());
+            s.erase(std::unique(s.begin(), s.end()), s.end());
+            poly_face_uv_set[f->idx()] = s;
+        }
+
+        mergePolyToQuad(out_quadMesh, heLocalUvProp);
+
+        if (out_layout) {
+            SurfaceLayout &l = *out_layout;
+            /* collect the candidate final faces per uv set */
+            for (QuadMesh::FaceIter f = out_quadMesh->faces_begin(), f_end = out_quadMesh->faces_end();
+                    f != f_end; ++f) {
+                UvSet s;
+                for (QuadMesh::HalfedgeHandle h = out_quadMesh->halfedge_handle(*f), h0 = h; ; ) {
+                    const Vec2i &uv = heLocalUvProp[h];
+                    s.push_back(std::make_pair((int)uv[0], (int)uv[1]));
+                    h = out_quadMesh->next_halfedge_handle(h);
+                    if (h == h0) break;
+                }
+                std::sort(s.begin(), s.end());
+                s.erase(std::unique(s.begin(), s.end()), s.end());
+                faces_of_uv_set[s].push_back(f->idx());
+            }
+
+            l.cell_quad_face.assign(l.n_cells, -1);
+            for (int c = 0; c < l.n_cells; ++c) {
+                const int poly_face = l.cell_poly_face[c];
+                if (poly_face < 0 || poly_face >= (int)poly_face_uv_set.size()) continue;
+                std::map<UvSet, std::vector<int> >::iterator it =
+                        faces_of_uv_set.find(poly_face_uv_set[poly_face]);
+                if (it == faces_of_uv_set.end() || it->second.empty()) continue;
+                l.cell_quad_face[c] = it->second.back();
+                it->second.pop_back();
+            }
+        }
+    } else {
+        out_quadMesh->garbage_collection();
+        out_quadMesh->release_face_status();
+        out_quadMesh->release_halfedge_status();
+        out_quadMesh->release_edge_status();
+        out_quadMesh->release_vertex_status();
+    }
+
+    if (out_refinedMesh) {
+        out_refinedMesh->garbage_collection();
+        out_refinedMesh->release_face_status();
+        out_refinedMesh->release_vertex_status();
+    }
+}
 }
 
 extern "C" {

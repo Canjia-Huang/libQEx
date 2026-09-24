@@ -192,6 +192,154 @@ void extractPolyMesh(TriMesh_t in_triMesh, const_UVVector_t in_uvs,
                      QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager &heLocalUvProp);
 
 /**
+ * @brief The quad layout expressed as a subdivision of the input triangle mesh.
+ *
+ * All vertices and faces refer to a refined mesh which is a genuine subdivision
+ * (a partition) of the input triangle mesh: it is obtained by cutting the
+ * triangle mesh along the polylines of the quad edges. Every face of the refined
+ * mesh lies completely inside exactly one cell, i.e. inside exactly one face of
+ * the extracted quad mesh.
+ *
+ * @see extractQuadMeshWithLayout()
+ */
+struct SurfaceLayout {
+        SurfaceLayout() : n_poly_faces(0), n_cells(0), n_degenerate_triangles(0), n_unresolved_segments(0),
+                n_cell_poly_face_conflicts(0), n_failed_refined_faces(0), n_pruned_pieces(0),
+                n_degenerate_quad_edges(0),
+                n_degenerate_pieces(0), n_collapsed_quad_edges(0), n_coincident_quad_edges(0),
+                n_cells_without_poly_face(0),
+                n_poly_faces_without_cell(0), n_desired_holes(0), n_undesired_holes(0) {}
+
+        /// one straight piece of a quad edge polyline
+        struct Piece {
+                /// triangle mesh face the piece lies in
+                int tri_face;
+                /// piece endpoints in the uv frame of that triangle
+                OpenMesh::Vec2d uv_in, uv_out;
+        };
+
+        /// a quad edge: a connection between two grid vertices
+        struct QuadEdge {
+                QuadEdge() : gv_a(-1), gv_b(-1), poly_face_a(-1), poly_face_b(-1),
+                        poly_halfedge_a(-1), poly_halfedge_b(-1), cell_left(-1), cell_right(-1) {}
+
+                /// grid vertices connected by this quad edge
+                int gv_a, gv_b;
+                /// faces of the extracted quad mesh on either side of it
+                int poly_face_a, poly_face_b;
+                /// halfedges of the extracted quad mesh, -1 if unavailable
+                int poly_halfedge_a, poly_halfedge_b;
+                /// cells on the left / right hand side of the directed edge gv_a -> gv_b
+                int cell_left, cell_right;
+                /// indices into SurfaceLayout::vertex_position: the polyline of this quad edge
+                std::vector<int> vertices;
+                /// the same polyline as 3d points
+                std::vector<OpenMesh::Vec3d> points;
+                /// the straight pieces the polyline consists of
+                std::vector<Piece> pieces;
+        };
+
+        // ---------- the refined mesh (subdivision of the triangle mesh) ----------
+        std::vector<OpenMesh::Vec3d> vertex_position;
+        /// 0: triangle mesh vertex, 1: point on a triangle mesh edge, 2: grid vertex
+        std::vector<int> vertex_kind;
+        std::vector<int> vertex_tri_vertex;
+        std::vector<int> vertex_tri_edge;
+        std::vector<int> vertex_grid_vertex;
+        std::vector<std::vector<int> > face_vertices;
+        /// per refined face: the triangle mesh face it belongs to
+        std::vector<int> face_tri_face;
+        /// per refined face: the cell (== quad mesh face) it belongs to
+        std::vector<int> face_cell;
+        /// per refined face: per edge, the quad edge it lies on, or -1
+        std::vector<std::vector<int> > face_edge_quad_edge;
+
+        // ---------- the correspondence ----------
+        /// number of faces of the extracted poly mesh (before merging to quads)
+        int n_poly_faces;
+        /// number of cells
+        int n_cells;
+        /// per cell: the corresponding face of the extracted quad mesh
+        std::vector<int> cell_poly_face;
+        /**
+         * Per cell: the corresponding face of the final quad mesh.
+         *
+         * Only meaningful if the merging step was run; the poly mesh of
+         * extractPolyMesh() and the final quad mesh differ only in that
+         * degenerate (zero length) grid edges are collapsed, so both meshes have
+         * one face per cell. -1 if the face could not be determined.
+         */
+        std::vector<int> cell_quad_face;
+        /// per cell: the triangle mesh faces covered by the cell
+        std::vector<std::vector<int> > cell_tri_faces;
+        /// per cell: the quad edges on the cell's boundary
+        std::vector<std::vector<int> > cell_quad_edges;
+        /// per cell: the cell's boundary as one cyclic sequence of vertices
+        std::vector<std::vector<int> > cell_vertices;
+
+        // ---------- quad edges (with their polylines) ----------
+        std::vector<QuadEdge> quad_edges;
+
+        // ---------- diagnostics ----------
+        size_t n_degenerate_triangles;
+        size_t n_unresolved_segments;
+        size_t n_cell_poly_face_conflicts;
+        size_t n_failed_refined_faces;
+        /// polyline pieces that had to be pruned because they separate nothing
+        size_t n_pruned_pieces;
+        /// quad edges that do not separate two distinct quad mesh faces (fins)
+        size_t n_degenerate_quad_edges;
+        /// polyline pieces that collapsed to a single point (they separate nothing)
+        size_t n_degenerate_pieces;
+        /// quad edges whose polyline collapsed to a single point (nothing to separate)
+        size_t n_collapsed_quad_edges;
+        /**
+         * Quad edges that run along exactly the same curve as another quad edge
+         * (relaxed grid folds); they share that curve's cells.
+         */
+        size_t n_coincident_quad_edges;
+        /**
+         * Cells that correspond to no face of the quad mesh: QEx's face
+         * construction did not build a face there (the extractor reports these as
+         * "undesired holes"). Their cell_poly_face is -1.
+         */
+        size_t n_cells_without_poly_face;
+        /// quad mesh faces that no cell is assigned to (should be 0)
+        size_t n_poly_faces_without_cell;
+        /// holes reported by the extractor (a desired hole is a hole of the input mesh)
+        int n_desired_holes;
+        /// holes the extractor itself created; they explain unassigned cells/faces
+        int n_undesired_holes;
+};
+
+/**
+ * @brief Extract the quad mesh together with the layout on the triangle mesh.
+ *
+ * In addition to what extractQuadMeshOM()/mergePolyToQuad() do, this outputs
+ *
+ *  - the polyline of every quad edge on the triangle mesh surface and
+ *  - the subdivision of the triangle mesh along those polylines, including the
+ *    correspondence between the quad mesh faces and the triangle mesh faces
+ *    covered by them.
+ *
+ * @param in_triMesh @see extractQuadMeshOM()
+ * @param in_uvs @see extractQuadMeshOM()
+ * @param in_vertexValences @see extractQuadMeshOM()
+ * @param out_quadMesh the extracted quad mesh
+ * @param out_layout the layout; may be null
+ * @param out_refinedMesh the refined mesh, i.e. the subdivision of the triangle
+ *        mesh; may be null
+ * @param in_mergeToQuads whether the "Vertex Merging"/"Q-Edge Recovery" steps
+ *        should be run (true, i.e. like extractQuadMeshOM()) or whether the poly
+ *        mesh as it comes out of extractPolyMesh() should be kept (false)
+ */
+DLLEXPORT
+void extractQuadMeshWithLayout(TriMesh_t in_triMesh, const_UVVector_t in_uvs,
+                               const_ValenceVector_t in_vertexValences,
+                               QuadMesh_t out_quadMesh, QEx::SurfaceLayout *out_layout,
+                               QuadMesh_t out_refinedMesh, bool in_mergeToQuads);
+
+/**
  * Performs the "Vertex Merging" and "Q-Edge Recovery" steps described in the paper.
  * Executing extractPolyMesh() first and then this function is equivalent to
  * executing extractQuadMeshOM().

@@ -153,6 +153,46 @@ endif()
 
 add_subdirectory(demo/minimal_c)
 add_subdirectory(demo/cmdline_tool)
+add_subdirectory(demo/export_layout)
+
+#
+# geogram (https://github.com/BrunoLevy/geogram) is an optional dependency: it is
+# only needed for the geogram bridge (interfaces/geogram), which converts the
+# extraction result into GEO::Mesh with all information stored in attributes and
+# writes it with geogram's mesh IO.
+#
+set (QEX_WITH_GEOGRAM "AUTO" CACHE STRING
+    "Build the geogram bridge: ON, OFF or AUTO (only if geogram was found).")
+set (GEOGRAM_ROOT "" CACHE PATH
+    "Root of a geogram source tree (e.g. ~/geogram) or of a geogram installation. Used when geogram is not installed.")
+
+if (NOT QEX_WITH_GEOGRAM STREQUAL "OFF")
+    if (NOT GEOGRAM_ROOT)
+        # a few common places, so that a plain "cmake ." works out of the box
+        foreach (candidate "$ENV{HOME}/geogram" "${CMAKE_SOURCE_DIR}/../geogram" "${CMAKE_SOURCE_DIR}/geogram")
+            if (EXISTS "${candidate}/src/lib/geogram/basic/common.h")
+                set (GEOGRAM_ROOT "${candidate}" CACHE PATH
+                    "Root of a geogram source tree (e.g. ~/geogram) or of a geogram installation." FORCE)
+                break ()
+            endif ()
+        endforeach ()
+    endif ()
+    find_package (Geogram)
+endif ()
+
+if (Geogram_FOUND)
+    message (STATUS "Building the geogram bridge (interfaces/geogram, demo/export_geogram).")
+    add_subdirectory (interfaces/geogram)
+    add_subdirectory (demo/export_geogram)
+elseif (QEX_WITH_GEOGRAM STREQUAL "ON")
+    message (FATAL_ERROR
+        "QEX_WITH_GEOGRAM=ON but geogram was not found. Set GEOGRAM_ROOT to a geogram "
+        "source tree (with a build directory) or to a geogram installation.")
+else ()
+    message (STATUS
+        "geogram not found - the geogram bridge is disabled. Set GEOGRAM_ROOT or "
+        "-DQEX_WITH_GEOGRAM=ON to enable it.")
+endif ()
 set(BUILD_UNIT_TESTS false CACHE BOOL "Whether to build the unit tests.")
 if (BUILD_UNIT_TESTS)
     enable_testing()

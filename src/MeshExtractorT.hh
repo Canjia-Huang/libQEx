@@ -167,6 +167,41 @@ class MeshExtractorT {
         // shortname
         typedef TransitionFunctionInt TF;
 
+        /**
+         * @brief A single straight piece of a traced grid edge (a "Q-edge").
+         *
+         * A traced local edge (i.e. a unit step of the integer grid) is a
+         * polyline on the triangle mesh surface. It is stored as a sequence of
+         * PathStep, each of which is a straight segment lying inside one
+         * triangle. The segment runs from @p uv_in to @p uv_out, both of which
+         * are given in the uv frame of @p fh, i.e. in exactly the same frame as
+         * the per-halfedge uvs read from _uv_coords for the halfedges of @p fh.
+         *
+         * The 3d version of a piece is obtained by mapping both endpoints with
+         * the barycentric mapping of @p fh (see get_mapping/applyMapping),
+         * which is the very same mapping that is used to place the grid
+         * vertices.
+         *
+         * @see find_path
+         */
+        struct PathStep {
+                PathStep() : fh(-1), exit_heh(-1), uv_in(0, 0), uv_out(0, 0) {}
+
+                PathStep(const FH _fh, const HEH _exit_heh, const Point_2 &_uv_in,
+                        const Point_2 &_uv_out) :
+                        fh(_fh), exit_heh(_exit_heh), uv_in(_uv_in), uv_out(_uv_out) {
+                }
+
+                /// the triangle this piece lives in
+                FH fh;
+                /// halfedge of fh through which the path leaves (invalid for the last piece)
+                HEH exit_heh;
+                /// entry point of the piece, in the uv frame of fh
+                Point_2 uv_in;
+                /// exit point of the piece, in the uv frame of fh
+                Point_2 uv_out;
+        };
+
         // structure to hold all relevant information of an edge locally emanating from a grid-vertex
 
         struct LocalEdgeInfo {
@@ -292,6 +327,15 @@ class MeshExtractorT {
 
                 TF accumulated_tf;
                 int halfedgeIndex;
+
+                /**
+                 * @brief The polyline of this grid edge on the triangle mesh surface.
+                 *
+                 * Filled in by find_path() while the connection is being traced.
+                 * Empty if the edge was never traced (e.g. the reverse
+                 * direction of a connection) or if tracing failed.
+                 */
+                std::vector<PathStep> path;
 
 #ifndef NDEBUG
                 bool primary;
@@ -476,6 +520,128 @@ class MeshExtractorT {
         template<class PolyMeshT>
         static void print_quad_mesh_metrics(const PolyMeshT& _quad_mesh);
 
+        /**
+         * @brief A quad layout edge: a connection between two grid vertices,
+         *        including its polyline on the triangle mesh surface.
+         */
+        struct QuadEdge {
+                QuadEdge() :
+                        gv_a(-1), gv_b(-1), lei_a(-1), poly_halfedge_a(-1), poly_halfedge_b(-1),
+                        poly_face_a(-1), poly_face_b(-1), cell_left(-1), cell_right(-1) {
+                }
+
+                /// grid vertices connected by this Q-edge (indices into the grid vertex array)
+                int gv_a, gv_b;
+                /// index of the local edge of gv_a that connects to gv_b
+                int lei_a;
+                /// halfedges of the extracted poly mesh (halfedge indices), -1 if unavailable
+                int poly_halfedge_a, poly_halfedge_b;
+                /// faces of the extracted poly mesh those halfedges belong to, -1 if unavailable
+                int poly_face_a, poly_face_b;
+                /// the cells on the left / right hand side of the directed edge gv_a -> gv_b
+                int cell_left, cell_right;
+                /// the polyline on the triangle mesh surface, in the direction gv_a -> gv_b
+                std::vector<PathStep> steps;
+                /// refined mesh vertex indices of the polyline; steps.size() + 1 entries
+                std::vector<int> step_vertices;
+        };
+
+        /**
+         * @brief The quad layout expressed as a subdivision of the triangle mesh.
+         *
+         * The refined mesh stored here is a true subdivision (a partition) of the
+         * input triangle mesh: every triangle is covered by refined faces, all of
+         * which share their vertices and edges with their neighbours, and every
+         * refined face lies completely inside exactly one cell, i.e. inside exactly
+         * one face of the extracted poly/quad mesh.
+         *
+         * The boundaries between the cells are exactly the Q-edge polylines listed
+         * in quad_edges.
+         */
+        struct Layout {
+                /// polylines of all quad edges, traced on the triangle mesh surface
+                std::vector<QuadEdge> quad_edges;
+
+                // ---------- the refined mesh (subdivision of the triangle mesh) ----------
+                /// 3d positions of the refined mesh vertices
+                std::vector<Point> vertex_position;
+                /// 0: triangle mesh vertex, 1: point inserted on a triangle mesh edge, 2: grid vertex
+                std::vector<int> vertex_kind;
+                /// for kind == 0: index of the triangle mesh vertex, otherwise -1
+                std::vector<int> vertex_tri_vertex;
+                /// for kind == 1: index of the triangle mesh edge the point was inserted on, otherwise -1
+                std::vector<int> vertex_tri_edge;
+                /// for kind == 2: index of the grid vertex, otherwise -1
+                std::vector<int> vertex_grid_vertex;
+                /// faces of the refined mesh, as sequences of vertex indices
+                std::vector<std::vector<int> > face_vertices;
+                /// per refined face: the triangle mesh face this face is part of
+                std::vector<int> face_tri_face;
+                /// per refined face: the cell (== face of the extracted poly mesh) it belongs to
+                std::vector<int> face_cell;
+                /// per refined face: per edge of the face, the Q-edge this edge lies on, or -1
+                std::vector<std::vector<int> > face_edge_quad_edge;
+
+                // ---------- the correspondence ----------
+                /// number of faces of the extracted poly mesh (before merging)
+                int n_poly_faces;
+                /// number of cells (== n_poly_faces, if all went well)
+                int n_cells;
+                /// per cell: the corresponding face of the extracted poly mesh
+                std::vector<int> cell_poly_face;
+                /// per cell: the Q-edges on its boundary
+                std::vector<std::vector<int> > cell_quad_edges;
+                /// per cell: the triangle mesh faces covered by the cell
+                std::vector<std::vector<int> > cell_tri_faces;
+                /// per cell: the vertices of the cell boundary, as a single cyclic sequence
+                std::vector<std::vector<int> > cell_vertices;
+
+                // ---------- diagnostics ----------
+                /// triangles that are degenerate in parameter space (kept as one refined face each)
+                size_t n_degenerate_triangles;
+                /// polyline pieces that could not be resolved to an edge of the refined mesh
+                size_t n_unresolved_segments;
+                /// cells for which the boundary quad edges do not agree on a poly mesh face
+                size_t n_cell_poly_face_conflicts;
+                /// refined faces that OpenMesh refused to add (non-manifold configuration)
+                size_t n_failed_refined_faces;
+                /// polyline pieces that had to be pruned because they separate nothing
+                size_t n_pruned_pieces;
+                /// quad edges that do not separate two distinct poly mesh faces (fins)
+                size_t n_degenerate_quad_edges;
+                /// polyline pieces that collapsed to a single point (they separate nothing)
+                size_t n_degenerate_pieces;
+                /// quad edges whose polyline collapsed to a single point
+                size_t n_collapsed_quad_edges;
+                /// quad edges running along exactly the same curve as another one (folds)
+                size_t n_coincident_quad_edges;
+                /// cells that QEx's face construction did not turn into a face (holes)
+                size_t n_cells_without_poly_face;
+                /// poly mesh faces that no cell is assigned to
+                size_t n_poly_faces_without_cell;
+                /// holes the extractor itself reports (see generate_faces_and_store_quadmesh)
+                int n_desired_holes;
+                int n_undesired_holes;
+        };
+
+        /**
+         * @brief Extract the quad mesh and, in addition, the layout as a
+         *        subdivision of the triangle mesh.
+         *
+         * @param _uv_coords per halfedge uvs, as for extract()
+         * @param heLocalUvProp per halfedge local uvs, as for extract()
+         * @param _quad_mesh the extracted (poly) mesh
+         * @param _out_refined_mesh gets the refined mesh, i.e. the subdivision of
+         *        the triangle mesh. Its faces are labelled by _out_layout.
+         * @param _out_layout the layout, see Layout.
+         * @param _external_valences optional external vertex valences, as for extract()
+         */
+        template<class PolyMeshT, class LayoutMeshT>
+        void extract_with_layout(std::vector<double>& _uv_coords,
+                typename PropMgr<PolyMeshT>::LocalUvsPropertyManager &heLocalUvProp,
+                PolyMeshT& _quad_mesh, LayoutMeshT& _out_refined_mesh, Layout& _out_layout,
+                const std::vector<unsigned int> * const _external_valences = 0);
+
 #ifdef TESTING
     public:
 #else
@@ -511,8 +677,9 @@ class MeshExtractorT {
         void check_connections();
 
         // find path for outgoing local edge via tracing
+        // if out_path is non-null, the traced polyline is recorded into it
         FindPathResult find_path(const GridVertex& _gv, const LocalEdgeInfo& lei,
-                std::vector<double>& _uv_coords);
+                std::vector<double>& _uv_coords, std::vector<PathStep> *out_path);
 
         // find local connection where it is known that the endpoint intersects the triangle
         FindPathResult find_local_connection(const Point_2& _uv_from,
@@ -591,7 +758,7 @@ class MeshExtractorT {
         // barycentric mapping of p between _tri and (_a,_b,_c)
         inline Matrix_3 get_mapping(const Triangle_2& _tri, const Point& _a, const Point& _b, const Point& _c) const;
 
-        inline Point applyMapping(const Matrix_3 &M, double x, double y) {
+        inline Point applyMapping(const Matrix_3 &M, double x, double y) const {
             Point p3d(0, 0, 0);
             for (unsigned int i = 0; i < 3; ++i)
                 p3d[i] += M(i, 0) * x + M(i, 1) * y + M(i, 2);
@@ -621,6 +788,42 @@ class MeshExtractorT {
 
         LocalEdgeInfo *getNextConnectedLeiWithHE(int connected_to_idx, int orientation_idx,
                 int direction);
+
+        /**
+         * @brief Build the layout (Q-edge polylines, subdivision of the triangle
+         *        mesh, cell <-> triangle correspondence).
+         *
+         * Must be called after extract(); the extracted poly mesh has to be
+         * passed in, since the local edges are linked to its halfedges.
+         */
+        template<class PolyMeshT, class LayoutMeshT>
+        void build_layout(const PolyMeshT &_poly_mesh, LayoutMeshT &_out_refined_mesh,
+                Layout &_out_layout) const;
+
+        /// 3d point of the surface associated with a halfedge, using the very
+        /// same embedding that was used to place the grid vertices.
+        Point surface_point(const HEH _heh) const {
+            if (use_original_embedding_)
+                return tri_mesh_.point(tri_mesh_.to_vertex_handle(_heh));
+            assert((size_t)_heh.idx() < embedding_points_.size());
+            return embedding_points_[_heh.idx()];
+        }
+
+        /// map a uv position inside the given triangle onto the surface
+        Point surface_point(const FH _fh, const Point_2 &_uv) const {
+            const HEH heh0 = tri_mesh_.halfedge_handle(_fh);
+            const HEH heh1 = tri_mesh_.next_halfedge_handle(heh0);
+            const HEH heh2 = tri_mesh_.next_halfedge_handle(heh1);
+            const Matrix_3 m = get_mapping(
+                    Triangle_2(uv_of(heh0), uv_of(heh1), uv_of(heh2)),
+                    surface_point(heh0), surface_point(heh1), surface_point(heh2));
+            return applyMapping(m, _uv[0], _uv[1]);
+        }
+
+        /// uv coordinate stored on a halfedge
+        Point_2 uv_of(const HEH _heh) const {
+            return Point_2(uv_coords_[2 * _heh.idx()], uv_coords_[2 * _heh.idx() + 1]);
+        }
 
         void increment_opposite_connected_to_idx(
                 typename std::vector<LocalEdgeInfo>::iterator first,
@@ -655,6 +858,19 @@ class MeshExtractorT {
         // vector of grid vertices
         std::vector<GridVertex> gvertices_;
 
+        // holes of the extracted quad mesh, as reported by the extractor
+        int n_desired_holes_;
+        int n_undesired_holes_;
+
+        // the (preprocessed) uv coordinates the extraction actually worked with
+        std::vector<double> uv_coords_;
+
+        // how the grid vertices were embedded: either the positions of the
+        // triangle mesh itself, or a copy of the positions taken before the
+        // triangle mesh was decimated.
+        bool use_original_embedding_;
+        std::vector<Point> embedding_points_;
+
         // constant cartesian directions
         const Vector_2 du_;
         const Vector_2 dv_;
@@ -671,5 +887,10 @@ size_t MeshExtractorT<TMeshT>::LocalEdgeInfo::nextId = 0;
 #if !defined(QEX_QUADMESHEXTRACTORT_C)
 #define QEX_QUADMESHEXTRACTORT_TEMPLATES
 #include "MeshExtractorT.cc"
+#endif
+
+#if !defined(QEX_SURFACEPARTITIONT_C)
+#define QEX_SURFACEPARTITION_TEMPLATES
+#include "SurfacePartitionT.cc"
 #endif
 #endif // QEX_MESHEXTRACTORT_HH

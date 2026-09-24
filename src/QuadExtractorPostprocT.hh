@@ -72,7 +72,7 @@ class QuadExtractorPostprocT {
     public:
 
         /// Constructor
-        QuadExtractorPostprocT(MeshT& _mesh, const LocalUvsPropertyManager &localUvsProp) :
+        QuadExtractorPostprocT(MeshT& _mesh, LocalUvsPropertyManager &localUvsProp) :
                 mesh_(_mesh), localUvsProp(localUvsProp) {
         }
 
@@ -103,7 +103,7 @@ class QuadExtractorPostprocT {
     private:
 
         MeshT& mesh_;
-        const LocalUvsPropertyManager &localUvsProp;
+        LocalUvsPropertyManager &localUvsProp;
 };
 
 }// namespace QEx
