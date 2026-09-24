@@ -45,6 +45,38 @@ Read [our paper](https://www.rwth-graphics.de/publication/03204/) if you want to
 how we tackle it or skip ahead and download the source code if you
 don't care about the details and just need results.
 
+## Building and using the `qex` command line application
+
+`libQEx` builds with CMake (C++17). Optional dependencies are picked up
+automatically (macOS: Homebrew's OpenMesh, a geogram source tree in `~/geogram`):
+
+```bash
+git clone --recurse-submodules <this repository>   # CLI11 lives in third_party/CLI11
+cmake -S . -B build
+cmake --build build
+```
+
+All executables end up in `build/bin`, all libraries in `build/lib`. The main
+application is `qex`:
+
+```bash
+build/bin/qex --in <input.obj> --out <output.obj> [-v|--valences <file.vval>] [--out-poly <file>]
+```
+
+`--out` and `--out-poly` also accept a directory, in which case the file names are
+derived from the input mesh (`<input>_quad.obj`, `<input>_poly.geogram`).
+
+It extracts a quad mesh from a triangle mesh whose per-halfedge UVs form a
+(relaxed) integer grid map and writes it to the file given by `--out`. `--out-poly <file>`
+additionally stores the *polygonal* mesh - the triangle mesh cut along all quad
+edge polylines, i.e. the quad layout as a subdivision of the triangle mesh - in
+geogram's mesh format, with *all* information (the quad face <-> triangle face
+correspondence, the quad edge polylines, per edge/vertex/facet labels) kept in
+mesh attributes.
+
+Run `build/bin/qex --help` for the details. The `demo/` directory contains small
+standalone tools that additionally write the layout as OBJ/text files.
+
 ## License
 
 `libQEx` is free software: you can redistribute it and/or modify it under

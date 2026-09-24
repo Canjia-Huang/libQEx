@@ -179,6 +179,75 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 
 **踩坑**：geogram 的 `.geogram` 写出器会查询 `sys:compression_level`，而该变量只在 `CmdLine::import_arg_group("standard")` 之后才存在，否则 `geo_assert(variable_exists)` 直接 abort（带 stacktrace）。因此 `GeogramBridge::initialize()` 里除了 `GEO::initialize()` 还要 `GEO::CmdLine::import_arg_group("standard")`。
 
+## 10. `qex` 命令行程序（CLI11）
+
+### CLI11 submodule
+
+```
+git submodule add https://github.com/CLIUtils/CLI11 third_party/CLI11   # v2.7.2-16 (eced4d8)
+```
+- `.gitmodules` 已记录；`third_party/CLI11` 为 gitlink（**不要**把它的内容提交进本仓库）。
+- 新克隆仓库后需要 `git submodule update --init --recursive`。
+- CMake 侧：`add_subdirectory(third_party/CLI11 EXCLUDE_FROM_ALL)`，并把 tests/examples/docs/single-file/install 全部关掉；链接 `CLI11::CLI11`（header-only）。若 `third_party/CLI11` 缺失，只跳过 `qex` 目标并给出提示，其余照常构建。
+
+### `apps/qex`（可执行文件名为 `qex`）
+
+把原先 `demo/cmdline_tool`（提取 → 写 quad mesh OBJ，支持 VVAL 顶点价数）与 geogram 导出合并成一个 CLI：
+
+```
+qex [OPTIONS]
+
+  -i,--in FILE         带 face-based UV 的三角网格（OBJ，必填）
+  -o,--out PATH        四边形网格输出（OBJ，必填）
+  -v,--valences FILE   VVAL 顶点价数（可选）
+  --out-poly PATH      把 polymesh 存成 geogram 网格（可选）
+  -h,--help            CLI11 自带
+  （不接受位置参数；所有输入输出都走选项）
+```
+
+- `--out` / `--out-poly` 给的是**目录**时，自动用输入文件名推导：`<输入名（去扩展名）>_quad.obj` / `<输入名（去扩展名）>_poly.geogram`（见 `main.cpp` 里的 `std::filesystem::is_directory` 分支；注意结果路径会拼成 `dir//name` 这种双斜杠，能用但不美观）。
+- `--out-poly PATH` 直接保存 **polymesh**（把三角网格沿所有 Q-edge polyline 切开后的多边形网格，即布局在三角网格上的剖分）为 `GEO::Mesh` 写到该路径；**不写 quad mesh 的 geogram**。所有信息仍在 mesh attributes 里（`QEx::GeogramBridge::toRefinedMesh`）：
+  - 顶点：`qex_kind`、`qex_tri_vertex`、`qex_tri_edge`、`qex_grid_vertex`、`qex_cell`、`qex_quad_edge`、`qex_quad_edge_step`
+  - 边：`qex_quad_edge`、`qex_tri_edge`
+  - 面：`qex_tri_face`、`qex_cell`、`qex_quad_face`、`qex_tri_faces`
+  - 面角：`qex_corner_quad_edge`
+- `--out-poly` 只在构建时找到 geogram 才存在；否则该选项以明确信息报错（编译期 `QEX_HAVE_GEOGRAM`）。
+
+**help 的 description / footer**（写在 `main.cpp` 顶部）：description 说明「基于原始 libQEx 的 cmdline（cmdline_tool），额外增加了 polymesh 的导出」；footer 为
+
+```
+SUPPORT:
+ - Developed by huangcanjia
+ - For bug reports or requirements, please contact: Canjia Huang <huangcanjia0214@gmail.com>
+```
+
+> CLI11 默认会把 footer 当段落重排（吃掉行首缩进、按 80 列折行），所以代码里用 `dynamic_cast<CLI::Formatter *>(app.get_formatter().get())->enable_footer_formatting(false)` 关掉重排，footer 才能逐字输出。description 里引用选项名时注意与实际选项一致（现在是 `--out-poly`）。
+
+退出码：0 正常；2 读输入失败；3 输入没有 halfedge UV；4 VVAL 非法；5 写文件失败；解析错误沿用 CLI11 约定（106 缺必填选项、缺值/多余参数等亦非 0）。
+
+实测（duck_miq_8_param.obj）：
+- `qex -i in.obj -o out.obj --out-poly poly.geogram` → out.obj + poly.geogram（17336 v / 44580 e / 27246 f，554 条 Q-edge 的 polyline 都在里面），**不产生 quad mesh 的 geogram**；
+- 用 geogram 的 `mesh_load` 读回 `poly.geogram`：顶点 7 类属性 + 边 2 类 + 面 4 类 + 面角 1 类全部保留；
+- `-o odir/ --out-poly odir/` → `odir/duck_miq_8_param_quad.obj` + `odir/duck_miq_8_param_poly.geogram`；
+- 传位置参数会被拒绝（退出码 106）。
+
+> 需要 `_refined.obj` / `_polylines.obj` / `_cells.obj` / `_layout.txt` 或 quad mesh 的 geogram 文件时，用保留的 `bin/export_layout` 与 `bin/export_geogram`。
+
+### 输出目录
+
+根 `CMakeLists.txt` 统一设置：
+
+```cmake
+set (QEX_BIN_DIR "${CMAKE_BINARY_DIR}/bin" CACHE PATH ...)
+set (QEX_LIB_DIR "${CMAKE_BINARY_DIR}/lib" CACHE PATH ...)
+set (CMAKE_RUNTIME_OUTPUT_DIRECTORY  "${QEX_BIN_DIR}")   # 可执行文件 → bin/
+set (CMAKE_LIBRARY_OUTPUT_DIRECTORY  "${QEX_LIB_DIR}")   # 动态库     → lib/
+set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY  "${QEX_LIB_DIR}")   # 静态库     → lib/
+```
+（含 DEBUG/RELEASE/... 各配置；`QEX_LIBRARY_DIR` 也指向新的 lib 目录，供以子项目方式引用时使用。）
+
+实测 `<build>/bin/`：`qex`、`cmdline_tool`、`export_layout`、`export_geogram`、`demo_minimal_c`；`<build>/lib/`：`libQEx.dylib`、`libQExStatic.a`、`libQExGeogram.dylib`、`libQExGeogramStatic.a`。
+
 ## 9. 备注
 
 - 本会话 Hindsight 记忆库返回 401（未配置 API key），故以上结论均来自源码阅读 + 本机实测，未写入记忆。

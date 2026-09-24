@@ -38,6 +38,22 @@ set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set (CMAKE_CXX_EXTENSIONS OFF)
 
+#
+# Output layout: all executables end up in <build dir>/bin, all libraries in
+# <build dir>/lib - independent of the directory a target is declared in.
+#
+set (QEX_BIN_DIR "${CMAKE_BINARY_DIR}/bin" CACHE PATH "Where the built executables are placed.")
+set (QEX_LIB_DIR "${CMAKE_BINARY_DIR}/lib" CACHE PATH "Where the built libraries are placed.")
+
+set (CMAKE_RUNTIME_OUTPUT_DIRECTORY "${QEX_BIN_DIR}")
+set (CMAKE_LIBRARY_OUTPUT_DIRECTORY "${QEX_LIB_DIR}")
+set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${QEX_LIB_DIR}")
+foreach (config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} "${QEX_BIN_DIR}")
+    set (CMAKE_LIBRARY_OUTPUT_DIRECTORY_${config} "${QEX_LIB_DIR}")
+    set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config} "${QEX_LIB_DIR}")
+endforeach ()
+
 find_package (OpenMesh REQUIRED)
 
 #
@@ -67,6 +83,7 @@ include_directories (
     )
 
 link_directories (
+    ${QEX_LIB_DIR}
     ${CMAKE_BINARY_DIR}
     ${LIBRARY_DIRS}
     )
@@ -148,7 +165,7 @@ if(NOT "${PROJECT_NAME}" MATCHES "QEx")
 	set (QEX_LIBRARIES QEx PARENT_SCOPE)
 	set (QEX_LIBRARY QEx PARENT_SCOPE)
 	set (QEX_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interfaces/c" PARENT_SCOPE)
-	set (QEX_LIBRARY_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE PATH "The directory where the OpenMesh libraries can be found.")
+	set (QEX_LIBRARY_DIR "${QEX_LIB_DIR}" CACHE PATH "The directory where the OpenMesh libraries can be found.")
 endif()
 
 add_subdirectory(demo/minimal_c)
@@ -204,6 +221,26 @@ if (BUILD_UNIT_TESTS)
     add_subdirectory(tests)
 endif()
 
+
+#
+# CLI11 (https://github.com/CLIUtils/CLI11), a git submodule in third_party/, is
+# used by the "qex" command line application (apps/qex). It is header only, so
+# the subproject is added with everything but the library target disabled.
+#
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/CLI11/CMakeLists.txt")
+    set (CLI11_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set (CLI11_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set (CLI11_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set (CLI11_SINGLE_FILE OFF CACHE BOOL "" FORCE)
+    set (CLI11_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory (third_party/CLI11 EXCLUDE_FROM_ALL)
+    set (QEX_HAVE_CLI11 ON)
+    add_subdirectory (apps/qex)
+else ()
+    message (STATUS
+        "third_party/CLI11 is missing (git submodule update --init --recursive) - "
+        "the qex command line application is disabled.")
+endif ()
 
 find_package(Doxygen)
 if (DOXYGEN_FOUND)
