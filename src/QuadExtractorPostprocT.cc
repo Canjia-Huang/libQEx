@@ -30,6 +30,40 @@
 
 namespace QEx {
 
+namespace {
+/**
+ * @brief Output iterator that appends a face and, in parallel, remembers the
+ *        index of the face the new one was derived from.
+ *
+ * simplify_face() writes the faces it produces through an output iterator, so a
+ * custom iterator is the least invasive way to keep track of where each new face
+ * came from.
+ */
+template<class FaceT>
+class SourceRecordingBackInserter {
+    public:
+        SourceRecordingBackInserter(std::vector<FaceT> &_faces, std::vector<int> &_sources,
+                int _source) :
+                faces_(_faces), sources_(_sources), source_(_source) {
+        }
+
+        SourceRecordingBackInserter &operator*() { return *this; }
+        SourceRecordingBackInserter &operator++() { return *this; }
+        SourceRecordingBackInserter &operator++(int) { return *this; }
+
+        SourceRecordingBackInserter &operator=(const FaceT &_face) {
+            faces_.push_back(_face);
+            sources_.push_back(source_);
+            return *this;
+        }
+
+    private:
+        std::vector<FaceT> &faces_;
+        std::vector<int> &sources_;
+        int source_;
+};
+} // namespace
+
 template<class MeshT>
 void QuadExtractorPostprocT<MeshT>::generate_collapse_graph(Graph &out_collapseGraph) {
     out_collapseGraph.clear();
@@ -361,7 +395,7 @@ size_t QuadExtractorPostprocT<MeshT>::delete_old_vertices(const std::vector<int>
 }
 
 template<class MeshT>
-size_t QuadExtractorPostprocT<MeshT>::delete_obsolete_faces_and_create_new_ones(const std::vector<int> &vertex_map, std::vector<std::vector<std::pair<VH, Vec2i> > > &out_newFaces) {
+size_t QuadExtractorPostprocT<MeshT>::delete_obsolete_faces_and_create_new_ones(const std::vector<int> &vertex_map, std::vector<std::vector<std::pair<VH, Vec2i> > > &out_newFaces, std::vector<int> *out_newFaceSources, std::vector<FH> *out_identityFaces) {
 
     typedef std::pair<VH, Vec2i> PVHV2I;
 
@@ -377,12 +411,22 @@ size_t QuadExtractorPostprocT<MeshT>::delete_obsolete_faces_and_create_new_ones(
          * Determine image of face.
          * Faces with identity mapping can stay as they were (i.e. we skip them).
          */
-        if (compute_face_image(*f_it, vertex_map, newFaceVertices)) continue;
+        if (compute_face_image(*f_it, vertex_map, newFaceVertices)) {
+            /* identity mapping: the face is left as it is */
+            if (out_identityFaces) out_identityFaces->push_back(*f_it);
+            continue;
+        }
 
         /*
-         * Simplify image of face.
+         * Simplify image of face. The faces it produces are remembered together
+         * with the face they came from, so that the correspondence between the
+         * poly mesh and the resulting quad mesh is known exactly.
          */
-        if (!simplify_face(newFaceVertices, std::back_inserter(out_newFaces)))
+        const bool produced = out_newFaceSources
+                ? simplify_face(newFaceVertices, SourceRecordingBackInserter<std::vector<PVHV2I> >(
+                        out_newFaces, *out_newFaceSources, f_it->idx()))
+                : simplify_face(newFaceVertices, std::back_inserter(out_newFaces));
+        if (!produced)
             ++deletedFaces;
 
         /*
@@ -423,7 +467,7 @@ size_t QuadExtractorPostprocT<MeshT>::delete_obsolete_faces_and_create_new_ones(
 }
 
 template<class MeshT>
-size_t QuadExtractorPostprocT<MeshT>::remove_double_faces(std::vector<FACE_UV> &in_out_newFaces) {
+size_t QuadExtractorPostprocT<MeshT>::remove_double_faces(std::vector<FACE_UV> &in_out_newFaces, std::vector<int> *in_out_sources) {
 
     if (in_out_newFaces.size() <= 1) return 0;
 
@@ -501,6 +545,8 @@ size_t QuadExtractorPostprocT<MeshT>::remove_double_faces(std::vector<FACE_UV> &
      */
     for (std::vector<int>::const_iterator it = kill_list.begin(); it != kill_list.end(); ++it) {
         in_out_newFaces.erase(in_out_newFaces.begin() + *it);
+        if (in_out_sources && *it < (int)in_out_sources->size())
+            in_out_sources->erase(in_out_sources->begin() + *it);
     }
 
     return kill_list.size();
@@ -565,7 +611,7 @@ size_t QuadExtractorPostprocT<MeshT>::remove_isolated_vertices(std::vector<std::
 }
 
 template<class MeshT>
-size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::pair<VH, Vec2i> > > &in_out_newFaces) {
+size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::pair<VH, Vec2i> > > &in_out_newFaces, std::vector<FH> *out_createdFaces) {
     /*
      * Create a dictionary that maps edges to their incident faces.
      *
@@ -627,6 +673,7 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
         if (f_it->size() <= 1) {
             assert(f_it->size() > 1);
             std::cerr << __FILE__": Warning: New face with less than two vertices. Skipping." << std::endl;
+            if (out_createdFaces) out_createdFaces->push_back(FH());
             ++skippedFaces;
             continue;
         }
@@ -732,6 +779,7 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
          */
 
         if (skip) {
+            if (out_createdFaces) out_createdFaces->push_back(FH());
             ++skippedFaces;
         } else {
             FH newFh = create_face(*f_it);
@@ -743,9 +791,11 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
                     std::cerr << v_it->first.idx();
                 }
                 std::cerr << std::endl;
+                if (out_createdFaces) out_createdFaces->push_back(FH());
                 continue;
             }
             assert(newFh.is_valid());
+            if (out_createdFaces) out_createdFaces->push_back(newFh);
 #ifndef NDEBUG
             mesh_.set_color(newFh, typename MeshT::Color(0, .4, 0, 1.0));
 #endif
@@ -799,7 +849,7 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
 }
 
 template<class MeshT>
-void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
+void QuadExtractorPostprocT<MeshT>::ngons_to_quads(std::vector<int> *out_poly_to_quad) {
 
     /*
      * Color existing faces in gray.
@@ -813,6 +863,28 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
     mesh_.request_vertex_colors();
     for (typename MeshT::VertexIter v_it = mesh_.vertices_begin(), v_end = mesh_.vertices_end(); v_it != v_end; ++v_it)
         mesh_.set_color(*v_it, typename MeshT::Color(0, 0, 0, 1.0));
+
+    /*
+     * Number of faces before the merging starts: the faces of the poly mesh, which
+     * is what the reported mapping refers to.
+     */
+    const size_t n_faces_before = mesh_.n_faces();
+
+    /*
+     * Bookkeeping for the mapping from the poly mesh's faces to the quad mesh's
+     * faces (filled in by the two functions below).
+     *
+     * The garbage collection at the end compacts the mesh by *swapping* deleted
+     * elements with live ones, so an index cannot simply be counted - but
+     * OpenMesh's garbage_collection() overload updates handles that are handed to
+     * it. Therefore the faces whose index has to be followed are kept here.
+     */
+    std::vector<int> newFaceSources;
+    std::vector<FH> identityFaces, createdFaces;
+    std::vector<FH> trackedFaces;
+    std::vector<FH *> trackedFacePointers;
+    std::vector<int> identityOldIndices;
+    std::vector<int> createdTrace;
 
     /*
      * Construct collapse graph.
@@ -842,7 +914,9 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
 #ifndef NDEBUG
     const size_t deletedFaces_initial =
 #endif
-            delete_obsolete_faces_and_create_new_ones(vertex_map, newFaces);
+            delete_obsolete_faces_and_create_new_ones(vertex_map, newFaces,
+                    out_poly_to_quad ? &newFaceSources : 0,
+                    out_poly_to_quad ? &identityFaces : 0);
 #ifndef NDEBUG
     const size_t updatedFaces_initial =
 #endif
@@ -851,14 +925,14 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
     size_t deletedVertices_cleanup = 0;
 
     for (size_t facesDeleted = 1337; facesDeleted > 0; deletedFaces_cleanup += facesDeleted) {
-        facesDeleted = remove_double_faces(newFaces);
+        facesDeleted = remove_double_faces(newFaces, out_poly_to_quad ? &newFaceSources : 0);
         deletedVertices_cleanup += remove_isolated_vertices(newFaces);
     }
 
 #ifndef NDEBUG
     size_t skippedFaces =
 #endif
-            create_faces(newFaces);
+            create_faces(newFaces, out_poly_to_quad ? &createdFaces : 0);
 
     /*
      * Delete all vertices that were mapped somewhere else.
@@ -867,6 +941,34 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
     const size_t deletedVertices =
 #endif
             delete_old_vertices(vertex_map);
+
+    /*
+     * Collect the faces whose new index we have to know before the garbage
+     * collection: the identity mapped ones (their handle's index *now* is their
+     * index in the poly mesh, after the collection it is their index in the quad
+     * mesh) and the ones that were just built for the rebuilt faces.
+     */
+    if (out_poly_to_quad) {
+        trackedFaces.reserve(n_faces_before);
+        trackedFacePointers.reserve(n_faces_before);
+        identityOldIndices.reserve(identityFaces.size());
+
+        for (size_t i = 0; i < identityFaces.size(); ++i) {
+            if (!identityFaces[i].is_valid()) continue;
+            identityOldIndices.push_back(identityFaces[i].idx());
+            trackedFaces.push_back(identityFaces[i]);
+        }
+
+        createdTrace.assign(createdFaces.size(), -1);
+        for (size_t k = 0; k < createdFaces.size(); ++k) {
+            if (!createdFaces[k].is_valid()) continue;
+            createdTrace[k] = (int)trackedFaces.size();
+            trackedFaces.push_back(createdFaces[k]);
+        }
+
+        for (size_t i = 0; i < trackedFaces.size(); ++i)
+            trackedFacePointers.push_back(&trackedFaces[i]);
+    }
 
 #ifndef NDEBUG
     std::cout
@@ -877,7 +979,36 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
             << "  During face materialization skipped " << skippedFaces << " faces due to non-manifoldness." << std::endl;
 #endif
 
-    mesh_.garbage_collection();
+    /*
+     * Garbage collection: with the tracked handles this also yields the new
+     * indices of the faces we care about.
+     */
+    std::vector<typename MeshT::VertexHandle *> no_vertices;
+    std::vector<typename MeshT::HalfedgeHandle *> no_halfedges;
+    if (out_poly_to_quad) {
+        mesh_.garbage_collection(no_vertices, no_halfedges, trackedFacePointers);
+    } else {
+        mesh_.garbage_collection();
+    }
+
+    if (out_poly_to_quad) {
+        out_poly_to_quad->assign(n_faces_before, -1);
+
+        /* a face that was not touched keeps its geometry, its index may change */
+        for (size_t i = 0; i < identityOldIndices.size(); ++i)
+            (*out_poly_to_quad)[identityOldIndices[i]] = trackedFaces[i].idx();
+
+        /* a rebuilt face is replaced by the face that was built from it */
+        for (size_t k = 0; k < createdFaces.size(); ++k) {
+            if (createdTrace.empty() || createdTrace[k] < 0) continue;
+            const int source = k < newFaceSources.size() ? newFaceSources[k] : -1;
+            /* one face can be split into several; the first one wins */
+            if (source >= 0 && source < (int)out_poly_to_quad->size()
+                    && (*out_poly_to_quad)[source] < 0)
+                (*out_poly_to_quad)[source] = trackedFaces[createdTrace[k]].idx();
+        }
+    }
+
     mesh_.update_normals();
 
 #ifndef NDEBUG

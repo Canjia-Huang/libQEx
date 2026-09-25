@@ -45,7 +45,8 @@
 - **格胞**：对 refined 面做 flood fill（Q-edge 链为 barrier）；`cell_poly_face` 给出 cell → poly 面。
 - **对应关系**：每个 quad/poly 面恰好一个格胞（bunny 2071/2071、fandisk 897/897、duck 264/270 剩余 6 个面落在洞周围）。
 - **导出工具**：`demo/export_layout/`，输出 6 个产物 + 运行日志 + 两级验收结论。
-- **既有 bug 顺带修复**：`QuadExtractorPostprocT::create_face()` 的 `TODO: Transfer Local UV property` 已实现（merge 后新面的 local uv 不再失效），并据此提供 `cell_quad_face`（cell → 最终 quad 面，用 local uv 集合 + 贪心配对避免退化面 key 冲突）。
+- **既有 bug 顺带修复**：`QuadExtractorPostprocT::create_face()` 的 `TODO: Transfer Local UV property` 已实现（merge 后新面的 local uv 不再失效）。
+- **`cell_quad_face` 改为精确跟踪**（见 §10）：merge 过程中直接记录「poly 面 → quad 面」，不再用 local uv 集合去猜。
 
 ### 设计决定（有争议、已定）
 
@@ -70,7 +71,7 @@
 | `src/MeshExtractorT.cc` | `find_path()` 记录 polyline（`intersect_line_with_segment()`、`triangle_halfedge_segment()`）；`extract()` 保存 uv_coords 与 embedding；`generate_faces_and_store_quadmesh()` 暴露出 hole 计数；两处 `find_path` 调用点 |
 | `src/SurfacePartitionT.cc` | **新增**：`extract_with_layout()` + `build_layout()`；`LocalArrangement`（叶子剪枝、角序面遍历、**拓扑外表面判定**）；`UnionFind`；全部诊断计数 |
 | `src/QuadExtractorPostprocT.hh/.cc` | `localUvsProp` 改可变引用；`create_face()` 实现 local uv 传递（原 TODO） |
-| `interfaces/c/qex.h/.cc` | `SurfaceLayout` + `extractQuadMeshWithLayout()`；merge 后按 local uv 集合贪心匹配 `cell_quad_face` |
+| `interfaces/c/qex.h/.cc` | `SurfaceLayout` + `extractQuadMeshWithLayout()`；`mergePolyToQuad()` 新增 `out_poly_to_quad`，用它填 `cell_quad_face` |
 | `CMakeLists.txt` | `add_subdirectory(demo/export_layout)` |
 | `demo/export_layout/{main.cpp,CMakeLists.txt}` | **新增**导出工具 + 两级验收 |
 | `PROGRESS_quad_layout_export.md` / `quad_layout_export/README.md` | 文档 |
@@ -104,7 +105,7 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 6. **`same_direction` 要比「链上的具体一条 refined 边」**，不能拿整条链的首尾比；否则 `cell_left` 恒为 -1、conflicts 100%。
 7. **chart 概念**：面内 local uv 一致，面间相差 `(90°k 旋转 + 整数平移)`（bunny 4165 条内部边全部可精确拟合）。跨面比较 uv 前必须统一 chart。
 8. **区分「真 unresolved」与「退化/共线」**：piece 退化成一点（`a == b`，fandisk 666 个）与 Q-edge 与另一条共线（fandisk 274 条）都是 relaxed 网格的正常现象，必须单独计数，否则会被误判为错误。
-9. `Layout::cell_poly_face` 指向 **merge 之前**的 poly 面索引；merge 后索引会变（duck 270 → 267）。`cell_quad_face` 用 local uv 集合匹配，并对重复 key 采用贪心配对。
+9. `Layout::cell_poly_face` 指向 **merge 之前**的 poly 面索引；merge 后索引会变（duck 270 → 267）。`cell_quad_face` 由 merge 自己报告（见 §10），不依赖几何/uv。
 
 ---
 
@@ -268,3 +269,49 @@ set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY  "${QEX_LIB_DIR}")   # 静态库     → lib
 ## 11. 备注
 
 - 本会话 Hindsight 记忆库返回 401（未配置 API key），故以上结论均来自源码阅读 + 本机实测，未写入记忆。
+
+
+---
+
+## 10. `quad_face` 与导出的 quad mesh 面索引不一致 —— 已定位并修复
+
+### 现象与定位
+
+用户报告 refined 面属性 `quad_face` 与导出的 `quad_mesh.obj` 面索引对不上。独立验证（不依赖 QEx 内部数据）：
+
+1. **索引级**：refined 的 `quad_face` 指向的 quad 面，其 `cell` 属性确实等于该 refined 面的 `cell`（27207/27207 一致）—— 这只说明两个文件自洽，因为两者都来自同一个映射。
+2. **几何级**（判据：一个格胞的 quad 面，其角点应当是**该格胞格点的某个子集的平均**，因为 merge 会把重合格点平均成一个角点）：**264 个格胞里只有 208 个成立**，其余 56 个偏差很大（最大 32），其中像 duck 的 cell 16（poly 面 128）被指到 quad 面 233，而几何上最匹配的是 221 → **确有错配**。
+3. **拓扑级**（判据：被同一条 Q-edge 分开的两个格胞，其 quad 面在 quad mesh 里必须相邻）：也有大量反例。
+
+### 根因
+
+`cell_quad_face` 原先是这样得到的：把每个 poly 面的「local uv 集合」与 merge 后每个面的「local uv 集合」做字典匹配，冲突时按 cell 顺序贪心发放。这个做法在**退化面**（QEx 的 add_face 允许双重边面）和「不同面的角点 uv 集合恰好相同」时会分配错面；而且 merge 会把顶点位置做平均，事后无法用几何校验纠正。
+
+### 修复
+
+改为**在 merge 内部精确跟踪面映射**：
+
+- `QuadExtractorPostprocT::ngons_to_quads(std::vector<int> *out_poly_to_quad = 0)`：输出「merge 前的面索引 → merge 后的面索引」（-1 表示该面消失）。identity 面保持，被重建的面由其新建面接管；一个源面若被拆成多个（实测为 0 例）取第一个。
+- 为此把「源面索引」与「新建面的 handle」沿 `delete_obsolete_faces_and_create_new_ones()` / `remove_double_faces()` / `create_faces()` 全程带下去（源面用自定义 back-inserter 记录；`remove_double_faces` 删除时同步删除）。
+- `mergePolyToQuad(mesh, prop, std::vector<int> *out_poly_to_quad = 0)`；`extractQuadMeshWithLayout()` 用 `cell_quad_face[c] = poly_to_quad[cell_poly_face[c]]`。
+
+**踩到的关键坑**：`OpenMesh::garbage_collection()` **不保序** —— 它把被删元素与末尾存活元素 `std::swap`（见 `ArrayKernelT_impl.hh` 的 face 压缩循环），所以「新索引 = 前面存活面的个数」这种推算必然错（自检显示 214 个 identity 面里有 171 个被指到了别的面）。正确做法是用 OpenMesh 提供的**回写式重载**：
+
+```cpp
+std::vector<FH> tracked;            // identity 面 + 新建面
+std::vector<FH*> trackedPtrs;       // 指向 tracked 的元素（需先 reserve，指针才稳定）
+mesh_.garbage_collection(noVerts, noHalfEdges, trackedPtrs);   // 调用后 handle 已是新索引
+```
+
+（该重载要求传入「handle 指针容器」，因此 `tracked` 必须先 reserve 以免重分配。）
+
+### 修复后的验证（duck_miq_8 / bunny）
+
+| 判据 | duck | bunny |
+|---|---|---|
+| 账目：identity + 新建 = 最终面数 | 214 + 53 = 267 ✓ | 1914 + 157 = 2071 ✓ |
+| 几何：`quad_face` 就是「几何最佳面」 | **264 / 264** ✓ | 2064 / 2066（2 个例外是启发式几何判据的噪声，映射本身是构造性精确的） |
+| 拓扑：Q-edge 两侧格胞 → quad 面相邻 | 7443 边相邻 + 148 仅共顶点（该 Q-edge 在 merge 中退化成一点，属 QEx 的 Q-Edge Recovery 行为）+ 61 落在已知的 5 个 conflict 格胞（洞附近格胞跨越两个 poly 面） | — |
+| 工具自带验收（`export_geogram` / `export_layout`） | `All checks passed` ✓ | `All checks passed` ✓ |
+
+（修复前的对应数字：几何判据只有 208/264 成立，最坏偏差 32，且存在 cell 16 → 233 而正确是 221 的错配。）

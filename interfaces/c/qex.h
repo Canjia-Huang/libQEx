@@ -264,10 +264,11 @@ struct SurfaceLayout {
         /**
          * Per cell: the corresponding face of the final quad mesh.
          *
-         * Only meaningful if the merging step was run; the poly mesh of
-         * extractPolyMesh() and the final quad mesh differ only in that
-         * degenerate (zero length) grid edges are collapsed, so both meshes have
-         * one face per cell. -1 if the face could not be determined.
+         * Only meaningful if the merging step was run. It is obtained from the
+         * mapping that mergePolyToQuad() reports while it merges (not from the
+         * geometry, which would be unreliable because the merging moves vertices
+         * by averaging them). -1 if the cell has no face of the quad mesh, which
+         * is the case inside the extractor's holes.
          */
         std::vector<int> cell_quad_face;
         /// per cell: the triangle mesh faces covered by the cell
@@ -346,10 +347,15 @@ void extractQuadMeshWithLayout(TriMesh_t in_triMesh, const_UVVector_t in_uvs,
  *
  * @param inout_polyMesh The poly mesh which will be transformed into a quad mesh.
  * @param heLocalUvProp The local UVs used to perform the merging.
+ * @param out_poly_to_quad Optional. Receives one entry per face of the poly mesh as
+ *        it was *before* the merging: the index of the face of the resulting quad
+ *        mesh that took its place, or -1 if the face disappeared. The merging is
+ *        tracked, not guessed, so this mapping is exact.
  */
 DLLEXPORT
 void mergePolyToQuad(QuadMesh_t inout_polyMesh,
-                     QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager &heLocalUvProp);
+                     QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager &heLocalUvProp,
+                     std::vector<int> *out_poly_to_quad = 0);
 
 /**
  * @brief (Semi-)Generic version of extractQuadMeshOM(). Usable with different but identical traits.

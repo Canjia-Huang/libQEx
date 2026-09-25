@@ -51,9 +51,9 @@ void extractPolyMesh(TriMesh_t in_triMesh, const_UVVector_t in_uvs, const_Valenc
     qme.extract<QuadMesh>(uvs, heLocalUvProp, *out_quadMesh, in_vertexValences);
 }
 
-void mergePolyToQuad(QuadMesh_t inout_polyMesh, QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager &heLocalUvProp) {
+void mergePolyToQuad(QuadMesh_t inout_polyMesh, QEx::PropMgr<QuadMesh>::LocalUvsPropertyManager &heLocalUvProp, std::vector<int> *out_poly_to_quad) {
     QEx::QuadExtractorPostprocT<QuadMesh> qexPp(*inout_polyMesh, heLocalUvProp);
-    qexPp.ngons_to_quads();
+    qexPp.ngons_to_quads(out_poly_to_quad);
 
     inout_polyMesh->garbage_collection();
 
@@ -166,61 +166,22 @@ void extractQuadMeshWithLayout(TriMesh_t in_triMesh, const_UVVector_t in_uvs,
 
     if (in_mergeToQuads) {
         /*
-         * The merging step collapses degenerate (zero length) grid edges, so the
-         * final quad mesh has one face per cell as well - but its face indices
-         * differ from the poly mesh's ones. The local uvs survive the merging
-         * (in the same chart frame), so the faces can be matched by their set of
-         * distinct corner lattice coordinates.
+         * The merging reports which face of the resulting quad mesh replaced which
+         * face of the poly mesh, so the correspondence is taken from there instead
+         * of being guessed from the local uvs (which cannot be reliable: the
+         * merging moves the vertices by averaging them, and degenerate faces can
+         * share their corner coordinates).
          */
-        typedef std::vector<std::pair<int, int> > UvSet;
-        /* several faces can share the same set of corner lattice coordinates (e.g.
-         * when a face was built with "double edges"), so keep all candidates and
-         * hand them out one by one */
-        std::map<UvSet, std::vector<int> > faces_of_uv_set;
-
-        std::vector<UvSet> poly_face_uv_set(out_quadMesh->n_faces());
-        for (QuadMesh::FaceIter f = out_quadMesh->faces_begin(), f_end = out_quadMesh->faces_end();
-                f != f_end; ++f) {
-            UvSet s;
-            for (QuadMesh::HalfedgeHandle h = out_quadMesh->halfedge_handle(*f), h0 = h; ; ) {
-                const Vec2i &uv = heLocalUvProp[h];
-                s.push_back(std::make_pair((int)uv[0], (int)uv[1]));
-                h = out_quadMesh->next_halfedge_handle(h);
-                if (h == h0) break;
-            }
-            std::sort(s.begin(), s.end());
-            s.erase(std::unique(s.begin(), s.end()), s.end());
-            poly_face_uv_set[f->idx()] = s;
-        }
-
-        mergePolyToQuad(out_quadMesh, heLocalUvProp);
+        std::vector<int> poly_to_quad;
+        mergePolyToQuad(out_quadMesh, heLocalUvProp, out_layout ? &poly_to_quad : 0);
 
         if (out_layout) {
             SurfaceLayout &l = *out_layout;
-            /* collect the candidate final faces per uv set */
-            for (QuadMesh::FaceIter f = out_quadMesh->faces_begin(), f_end = out_quadMesh->faces_end();
-                    f != f_end; ++f) {
-                UvSet s;
-                for (QuadMesh::HalfedgeHandle h = out_quadMesh->halfedge_handle(*f), h0 = h; ; ) {
-                    const Vec2i &uv = heLocalUvProp[h];
-                    s.push_back(std::make_pair((int)uv[0], (int)uv[1]));
-                    h = out_quadMesh->next_halfedge_handle(h);
-                    if (h == h0) break;
-                }
-                std::sort(s.begin(), s.end());
-                s.erase(std::unique(s.begin(), s.end()), s.end());
-                faces_of_uv_set[s].push_back(f->idx());
-            }
-
             l.cell_quad_face.assign(l.n_cells, -1);
             for (int c = 0; c < l.n_cells; ++c) {
                 const int poly_face = l.cell_poly_face[c];
-                if (poly_face < 0 || poly_face >= (int)poly_face_uv_set.size()) continue;
-                std::map<UvSet, std::vector<int> >::iterator it =
-                        faces_of_uv_set.find(poly_face_uv_set[poly_face]);
-                if (it == faces_of_uv_set.end() || it->second.empty()) continue;
-                l.cell_quad_face[c] = it->second.back();
-                it->second.pop_back();
+                if (poly_face < 0 || poly_face >= (int)poly_to_quad.size()) continue;
+                l.cell_quad_face[c] = poly_to_quad[poly_face];
             }
         }
     } else {
