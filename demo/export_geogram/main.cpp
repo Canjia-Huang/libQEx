@@ -30,10 +30,13 @@ using namespace QEx;
 
 namespace {
 
-const char *const ATTR_CELL = "qex_cell";
-const char *const ATTR_QUAD_EDGE = "qex_quad_edge";
-const char *const ATTR_TRI_FACE = "qex_tri_face";
-const char *const ATTR_QUAD_EDGE_STEP = "qex_quad_edge_step";
+/* the same names GeogramBridge uses (see qex_geogram.h) */
+const char *const ATTR_CELL = "cell";
+const char *const ATTR_QUAD_EDGE = "quad_edge";
+const char *const ATTR_TRI_FACE = "tri_face";
+const char *const ATTR_TRI_FACES_NB = "tri_faces_nb";
+const char *const ATTR_QUAD_EDGE_STEP = "quad_edge_step";
+const char *const ATTR_BORDER = "border";
 
 int failures = 0;
 
@@ -155,27 +158,45 @@ int main(int argc, char **argv) {
                     + std::to_string(layout.face_vertices.size()));
 
     {
-        const bool have_cell = GEO::Attribute<int>::is_defined(
+        /* cell and tri_face are unsigned int, quad_face and tri_faces_nb differ */
+        const bool have_cell = GEO::Attribute<unsigned int>::is_defined(
                 refined_in.facets.attributes(), ATTR_CELL);
-        const bool have_tri = GEO::Attribute<int>::is_defined(
+        const bool have_tri = GEO::Attribute<unsigned int>::is_defined(
                 refined_in.facets.attributes(), ATTR_TRI_FACE);
-        check(have_cell && have_tri,
-                "facet attributes qex_cell / qex_tri_face are present");
-        if (have_cell && have_tri) {
-            const GEO::Attribute<int> cell(refined_in.facets.attributes(), ATTR_CELL);
-            const GEO::Attribute<int> tri(refined_in.facets.attributes(), ATTR_TRI_FACE);
-            size_t with_cell = 0, matching = 0;
+        const bool have_quad_face = GEO::Attribute<int>::is_defined(
+                refined_in.facets.attributes(), "quad_face");
+        const bool have_tri_nb = GEO::Attribute<unsigned int>::is_defined(
+                refined_in.facets.attributes(), ATTR_TRI_FACES_NB);
+        check(have_cell && have_tri && have_quad_face && have_tri_nb,
+                "facet attributes cell / tri_face / quad_face / tri_faces_nb are present");
+        if (have_cell && have_tri && have_quad_face && have_tri_nb) {
+            const GEO::Attribute<unsigned int> cell(refined_in.facets.attributes(), ATTR_CELL);
+            const GEO::Attribute<unsigned int> tri(refined_in.facets.attributes(), ATTR_TRI_FACE);
+            const GEO::Attribute<int> quad_face(refined_in.facets.attributes(), "quad_face");
+            const GEO::Attribute<unsigned int> tri_nb(refined_in.facets.attributes(),
+                    ATTR_TRI_FACES_NB);
+            size_t matching = 0, cells_ok = 0, holes = 0;
+            std::map<unsigned int, unsigned int> nb_of_cell;
+            std::map<unsigned int, int> quad_face_of_cell;
             for (GEO::index_t f = 0; f < refined_in.facets.nb(); ++f) {
-                if (cell[f] >= 0) ++with_cell;
-                if (cell[f] == layout.face_cell[f] && tri[f] == layout.face_tri_face[f]) ++matching;
+                if ((int)cell[f] == layout.face_cell[f] && (int)tri[f] == layout.face_tri_face[f])
+                    ++matching;
+                const unsigned int c = cell[f];
+                if (!nb_of_cell.count(c)) { nb_of_cell[c] = tri_nb[f]; quad_face_of_cell[c] = quad_face[f]; }
+                else if (nb_of_cell[c] == tri_nb[f] && quad_face_of_cell[c] == quad_face[f]) ++cells_ok;
+                if (quad_face[f] < 0) ++holes;
             }
-            check(with_cell == (size_t)refined_in.facets.nb(),
-                    "every refined face knows its cell",
-                    std::to_string(with_cell) + " of "
-                            + std::to_string(refined_in.facets.nb()) + " faces");
             check(matching == (size_t)refined_in.facets.nb(),
                     "cell and triangle index of every refined face round-trip",
                     std::to_string(matching) + " of " + std::to_string(refined_in.facets.nb()));
+            check(cells_ok == (size_t)refined_in.facets.nb() - nb_of_cell.size(),
+                    "tri_faces_nb and quad_face are constant within a cell",
+                    std::to_string(nb_of_cell.size()) + " cells");
+            check(holes > 0 || layout.n_cells_without_poly_face == 0,
+                    "cells without a quad face are marked with quad_face == -1",
+                    std::to_string(holes) + " facets in "
+                            + std::to_string(layout.n_cells_without_poly_face)
+                            + " hole cell(s)");
         }
     }
 
@@ -185,7 +206,7 @@ int main(int argc, char **argv) {
         const bool have_qe = GEO::Attribute<int>::is_defined(
                 refined_in.vertices.attributes(), ATTR_QUAD_EDGE);
         check(have_step && have_qe,
-                "vertex attributes qex_quad_edge / qex_quad_edge_step are present");
+                "vertex attributes quad_edge / quad_edge_step are present");
         if (have_step && have_qe) {
             const GEO::Attribute<int> step(refined_in.vertices.attributes(), ATTR_QUAD_EDGE_STEP);
             const GEO::Attribute<int> qe(refined_in.vertices.attributes(), ATTR_QUAD_EDGE);
@@ -207,14 +228,14 @@ int main(int argc, char **argv) {
     {
         const bool have_qe = GEO::Attribute<int>::is_defined(
                 refined_in.edges.attributes(), ATTR_QUAD_EDGE);
-        check(have_qe, "edge attribute qex_quad_edge is present",
+        check(have_qe, "edge attribute quad_edge is present",
                 std::to_string(refined_in.edges.nb()) + " edges");
         if (have_qe) {
             const GEO::Attribute<int> qe(refined_in.edges.attributes(), ATTR_QUAD_EDGE);
             size_t marked = 0;
             for (GEO::index_t e = 0; e < refined_in.edges.nb(); ++e)
                 if (qe[e] >= 0) ++marked;
-            check(marked > 0, "refined mesh edges are marked withtheir quad edge",
+            check(marked > 0, "refined mesh edges are marked with their quad edge",
                     std::to_string(marked) + " of " + std::to_string(refined_in.edges.nb()));
         }
     }
@@ -227,7 +248,7 @@ int main(int argc, char **argv) {
     {
         const bool have_cell = GEO::Attribute<int>::is_defined(
                 quads_in.facets.attributes(), ATTR_CELL);
-        check(have_cell, "quad mesh facet attribute qex_cell is present");
+        check(have_cell, "quad mesh facet attribute cell is present");
         if (have_cell) {
             const GEO::Attribute<int> cell(quads_in.facets.attributes(), ATTR_CELL);
             size_t with_cell = 0;
@@ -240,12 +261,12 @@ int main(int argc, char **argv) {
     {
         const bool have_qe2 = GEO::Attribute<int>::is_defined(
                 quads_in.edges.attributes(), ATTR_QUAD_EDGE);
-        check(have_qe2, "quad mesh edge attribute qex_quad_edge is present");
+        check(have_qe2, "quad mesh edge attribute quad_edge is present");
         if (have_qe2) {
             const GEO::Attribute<int> qe(quads_in.edges.attributes(), ATTR_QUAD_EDGE);
-            const bool have_border = GEO::Attribute<int>::is_defined(
-                    quads_in.edges.attributes(), "qex_border");
-            const GEO::Attribute<int> border(quads_in.edges.attributes(), "qex_border");
+            const bool have_border = GEO::Attribute<unsigned int>::is_defined(
+                    quads_in.edges.attributes(), ATTR_BORDER);
+            const GEO::Attribute<unsigned int> border(quads_in.edges.attributes(), ATTR_BORDER);
             std::map<int, int> per_quad_edge;
             size_t border_edges = 0, interior_without = 0;
             for (GEO::index_t e = 0; e < quads_in.edges.nb(); ++e) {

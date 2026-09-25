@@ -151,29 +151,33 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 - `save(mesh, filename)` / `saveRefinedMesh(...)` / `saveQuadMesh(...)` —— 用 `GEO::mesh_save`，扩展名决定格式（`.geogram` / `.mesh` / `.obj` / `.ply` / `.stl`）。
 - `describe(mesh)` —— 打印某个 mesh 上实际存在的属性（元素类型 + 维度）。
 
-**所有信息都写进 attributes**（`GEO::Attribute<int>(manager, name)`，geogram 会自动创建）：
+**所有信息都写进 attributes**（`GEO::Attribute<T>(manager, name)`，geogram 会自动创建）。命名规则：**不带库前缀**（元素类型 vertex/edge/facet/facet corner 本身就是属性身份的一部分），**能"没有值"的用 `int` 存 -1，永远有值的用 `unsigned int`**：
 
-| 元素 | 属性 | 含义 |
-|---|---|---|
-| refined 顶点 | `qex_kind` | 0=原三角网格顶点, 1=插在三角网格边上的点, 2=格点 |
-| | `qex_tri_vertex` / `qex_tri_edge` / `qex_grid_vertex` | 对应的原顶点 / 原边 / 格点索引，否则 -1 |
-| | `qex_quad_edge` / `qex_quad_edge_step` | 该顶点属于哪条 Q-edge 及其在 polyline 上的序号（**这就是 polyline 本身**） |
-| | `qex_cell` | 相邻面所属格胞（否则 -1） |
-| refined 边 | `qex_quad_edge` | 该边落在哪条 Q-edge 上，否则 -1 |
-| | `qex_tri_edge` | 该边落在哪条三角网格边上，否则 -1 |
-| refined 面 | `qex_tri_face` | 来自哪个原三角面 |
-| | `qex_cell` | 属于哪个格胞（洞内格胞也有值） |
-| | `qex_quad_face` | 该格胞对应的最终 quad mesh 面，-1 表示无 |
-| | `qex_tri_faces` | 该格胞覆盖的原三角面数 |
-| refined 面角 | `qex_corner_quad_edge` | 从该角出发的那条边落在哪条 Q-edge 上（即"哪些边是格胞边界"） |
-| quad 面 | `qex_cell` / `qex_poly_face` / `qex_quad_face` / `qex_tri_face_count` | 格胞 / merge 前的 poly 面 / 自身索引 / 覆盖三角面数 |
-| quad 边 | `qex_quad_edge` / `qex_border` | 对应的 Q-edge（含 polyline）/ 是否为洞或边界上的边 |
+| 元素 | 属性 | 类型 | 含义 |
+|---|---|---|---|
+| refined 顶点 | `kind` | unsigned int | 0=原三角网格顶点, 1=插在三角网格边上的点, 2=格点 |
+| | `tri_vertex` / `tri_edge` / `grid_vertex` | int | 对应的原顶点 / 原边 / 格点，否则 -1 |
+| | `cell` | int | 相邻的某个格胞，否则 -1 |
+| | `quad_edge` / `quad_edge_step` | int | 属于哪条 Q-edge 及在 polyline 上的序号，否则 -1 |
+| refined 边 | `quad_edge` / `tri_edge` | int | 落在哪条 Q-edge / 哪条三角网格边上，否则 -1 |
+| refined 面 | `tri_face` | unsigned int | 来自哪个原三角面 |
+| | `cell` | unsigned int | 属于哪个格胞（洞内也有值） |
+| | `quad_face` | int | 该格胞对应的最终 quad mesh 面，**-1 = 该格胞没有面（洞）** |
+| | `tri_faces_nb` | unsigned int | 该格胞覆盖的原三角面**个数** |
+| refined 面角 | `quad_edge` | int | 从该角出发的边落在哪条 Q-edge 上，否则 -1 |
+| quad 面 | `cell` / `poly_face` | int | 格胞 / merge 前的 poly 面，否则 -1 |
+| | `quad_face` | unsigned int | 自身索引（恒等） |
+| | `tri_faces_nb` | unsigned int | 覆盖的原三角面个数 |
+| quad 边 | `quad_edge` | int | 对应的 Q-edge（含 polyline），否则 -1 |
+| | `border` | unsigned int | 1 = 该边在洞/边界上（没有对应 Q-edge） |
 
-**polyline 的恢复方式**：一条 Q-edge 的 polyline = refined 网格上带同一 `qex_quad_edge` 的边序列，顶点顺序由 `qex_quad_edge_step` 给出（无损，不需要变长属性）。`cell → 原三角面` 的对应可由 refined 面的 `qex_cell` 反查。
+关于类型在文件里的写法：`unsigned int` 与 geogram 自己的 `index_t`（默认为 `unsigned int`）、`int` 与 `signed_index_t` 是同一底层类型，geogram 的类型注册表以 `index_t` / `signed_index_t` 作为规范名，所以在 `.geogram` 文件里会看到 `index_t`（4 字节，无符号）与 `signed_index_t`（4 字节，有符号）。用 `unsigned int` 而非 `index_t` 的好处是：即使 geogram 用 64 位索引构建（`geo_index_t = uint64_t`），这些属性仍是 32 位。
+
+**polyline 的恢复方式**：一条 Q-edge 的 polyline = refined 网格上带同一 `quad_edge` 的边序列，顶点顺序由 `quad_edge_step` 给出（无损，不需要变长属性）。`cell → 原三角面` 的对应可由 refined 面的 `cell` 反查。
 
 ### 工具与验证
 
-`demo/export_geogram/export_geogram <in.obj> <out_prefix> [--valences f] [--no-merge]`：跑提取 → 转换 → 写 `<prefix>_refined.geogram` 与 `<prefix>_quad.geogram`，**然后再读回来逐项校验**（顶点/面数、属性存在性、`qex_cell`/`qex_tri_face` 完全一致、Q-edge 0 的 polyline 完整回读、quad 边上的 Q-edge）。
+`demo/export_geogram/export_geogram <in.obj> <out_prefix> [--valences f] [--no-merge]`：跑提取 → 转换 → 写 `<prefix>_refined.geogram` 与 `<prefix>_quad.geogram`，**然后再读回来逐项校验**（顶点/面数、属性存在性与类型、`cell`/`tri_face` 完全一致、`tri_faces_nb`/`quad_face` 在格胞内恒定、洞格胞的 `quad_face == -1`、Q-edge 0 的 polyline 完整回读、quad 边上的 Q-edge）。
 
 本机实测（duck_miq_8）：`All checks passed`；refined mesh 17336 v / 44580 e / 27246 f / 89160 corners，属性全部保留；quad mesh 267 f / 534 e，其中 37 条是洞边界（无 Q-edge），497 条内部边都带 Q-edge；554 条 Q-edge 里有 57 条是面内 slit/共线（本就不是 quad mesh 的边）。
 
@@ -220,10 +224,10 @@ qex [OPTIONS]
 
 - `--out` / `--out-poly` 给的是**目录**时，自动用输入文件名推导：`<输入名（去扩展名）>_quad.obj` / `<输入名（去扩展名）>_poly.geogram`（见 `main.cpp` 里的 `std::filesystem::is_directory` 分支；注意结果路径会拼成 `dir//name` 这种双斜杠，能用但不美观）。
 - `--out-poly PATH` 直接保存 **polymesh**（把三角网格沿所有 Q-edge polyline 切开后的多边形网格，即布局在三角网格上的剖分）为 `GEO::Mesh` 写到该路径；**不写 quad mesh 的 geogram**。所有信息仍在 mesh attributes 里（`QEx::GeogramBridge::toRefinedMesh`）：
-  - 顶点：`qex_kind`、`qex_tri_vertex`、`qex_tri_edge`、`qex_grid_vertex`、`qex_cell`、`qex_quad_edge`、`qex_quad_edge_step`
-  - 边：`qex_quad_edge`、`qex_tri_edge`
-  - 面：`qex_tri_face`、`qex_cell`、`qex_quad_face`、`qex_tri_faces`
-  - 面角：`qex_corner_quad_edge`
+  - 顶点：`kind`、`tri_vertex`、`tri_edge`、`grid_vertex`、`cell`、`quad_edge`、`quad_edge_step`
+  - 边：`quad_edge`、`tri_edge`
+  - 面：`tri_face`、`cell`、`quad_face`、`tri_faces_nb`
+  - 面角：`quad_edge`（详见 §9 的完整表格）
 - `--out-poly` 只在构建时找到 geogram 才存在；否则该选项以明确信息报错（编译期 `QEX_HAVE_GEOGRAM`）。
 
 **help 的 description / footer**（写在 `main.cpp` 顶部）：description 说明「基于原始 libQEx 的 cmdline（cmdline_tool），额外增加了 polymesh 的导出」；footer 为

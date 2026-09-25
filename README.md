@@ -51,9 +51,10 @@ polylines — together with
 API: `QEx::SurfaceLayout` plus `QEx::extractQuadMeshWithLayout()`.
 Writers: `demo/export_layout` (OBJ + correspondence table) and the `GeogramBridge`
 (`toRefinedMesh()`, `toQuadMesh()`, `save()`), which stores *all* of the above in
-`GEO::Mesh` **attributes** (`qex_kind`, `qex_tri_vertex`, `qex_tri_edge`, `qex_grid_vertex`,
-`qex_cell`, `qex_quad_face`, `qex_tri_face`, `qex_quad_edge`, `qex_quad_edge_step`, ...), so
-exporting to `.geogram` loses nothing.
+`GEO::Mesh` **attributes** (`kind`, `tri_vertex`, `tri_edge`, `grid_vertex`, `cell`,
+`tri_face`, `tri_faces_nb`, `quad_face`, `quad_edge`, `quad_edge_step`, `poly_face`,
+`border`), so exporting to `.geogram` loses nothing. Attributes that can be "not there"
+are `int` (holding -1), all others are `unsigned int`.
 
 Measurements and the verification protocol are documented in
 [`PROGRESS_quad_layout_export.md`](PROGRESS_quad_layout_export.md).

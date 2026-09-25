@@ -36,23 +36,67 @@ namespace QEx {
 
 namespace {
 
-/** Attribute names, so that consumers and tests use the very same strings. */
+/**
+ * Attribute names.
+ *
+ * They are deliberately short (no library prefix, no repetition of the element
+ * type): the element a geogram attribute belongs to (vertex, edge, facet, facet
+ * corner) is part of its identity already, both in memory and in a geogram file,
+ * where the attributes are grouped per element type.
+ *
+ * Note the types: an attribute that can be "not there" is an int that stores -1,
+ * everything that always has a value is an unsigned int.
+ *
+ * | element       | attribute         | type         | meaning                                        |
+ * |---------------|-------------------|--------------|------------------------------------------------|
+ * | vertex        | kind              | unsigned int | 0 = triangle vertex, 1 = point on an edge,     |
+ * |               |                   |              | 2 = grid vertex                                |
+ * | vertex        | tri_vertex        | int          | triangle mesh vertex, -1                        |
+ * | vertex        | tri_edge          | int          | triangle mesh edge, -1                          |
+ * | vertex        | grid_vertex       | int          | grid vertex, -1                                 |
+ * | vertex        | cell              | int          | an incident cell, -1                            |
+ * | vertex        | quad_edge         | int          | quad edge the vertex lies on, -1                |
+ * | vertex        | quad_edge_step    | int          | position on that quad edge's polyline, -1       |
+ * | edge          | quad_edge         | int          | quad edge the edge lies on, -1                  |
+ * | edge          | tri_edge          | int          | triangle mesh edge the edge lies on, -1         |
+ * | facet         | tri_face          | unsigned int | triangle mesh face                              |
+ * | facet         | cell              | unsigned int | cell (region) the facet belongs to              |
+ * | facet         | quad_face         | int          | quad mesh face of that cell, -1 if it has none  |
+ * | facet         | tri_faces_nb      | unsigned int | triangle mesh faces covered by the cell         |
+ * | facet corner  | quad_edge         | int          | quad edge of the edge starting here, -1         |
+ * | quad facet    | cell              | int          | cell of the quad face, -1                       |
+ * | quad facet    | poly_face         | int          | poly mesh face before merging, -1               |
+ * | quad facet    | quad_face         | unsigned int | the facet's own index (identity)                |
+ * | quad facet    | tri_faces_nb      | unsigned int | triangle mesh faces covered by the cell         |
+ * | quad edge     | quad_edge         | int          | quad edge (with its polyline), -1               |
+ * | quad edge     | border            | unsigned int | 1 if the edge has no quad edge (hole/boundary)  |
+ */
 namespace Attr {
-const char *const KIND = "qex_kind";
-const char *const TRI_VERTEX = "qex_tri_vertex";
-const char *const TRI_EDGE = "qex_tri_edge";
-const char *const GRID_VERTEX = "qex_grid_vertex";
-const char *const QUAD_EDGE = "qex_quad_edge";
-const char *const QUAD_EDGE_STEP = "qex_quad_edge_step";
-const char *const CELL = "qex_cell";
-const char *const TRI_FACE = "qex_tri_face";
-const char *const QUAD_FACE = "qex_quad_face";
-const char *const TRI_FACES = "qex_tri_faces";
-const char *const TRI_FACE_COUNT = "qex_tri_face_count";
-const char *const CORNER_QUAD_EDGE = "qex_corner_quad_edge";
-const char *const POLY_FACE = "qex_poly_face";
-const char *const BORDER = "qex_border";
+const char *const KIND = "kind";
+const char *const TRI_VERTEX = "tri_vertex";
+const char *const TRI_EDGE = "tri_edge";
+const char *const GRID_VERTEX = "grid_vertex";
+const char *const CELL = "cell";
+const char *const QUAD_EDGE = "quad_edge";
+const char *const QUAD_EDGE_STEP = "quad_edge_step";
+const char *const TRI_FACE = "tri_face";
+const char *const QUAD_FACE = "quad_face";
+const char *const TRI_FACES_NB = "tri_faces_nb";
+const char *const POLY_FACE = "poly_face";
+const char *const BORDER = "border";
 } // namespace Attr
+
+/**
+ * @brief Value of an attribute that is known to be non-negative, as unsigned.
+ *
+ * The layout uses -1 to say "there is nothing here"; for the attributes that can
+ * never be -1 the values are stored as unsigned int, so the conversion has to be
+ * checked (in debug builds it asserts, in release builds it clamps).
+ */
+inline unsigned int as_unsigned(int v) {
+    geo_debug_assert(v >= 0);
+    return v < 0 ? 0u : (unsigned int)v;
+}
 
 /**
  * @brief A vertex index of a quad edge inside a cell loop, used to stitch the
@@ -91,7 +135,7 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
     }
 
     /* ---------------- attributes of the vertices ---------------- */
-    GEO::Attribute<int> kind(out.vertices.attributes(), Attr::KIND);
+    GEO::Attribute<unsigned int> kind(out.vertices.attributes(), Attr::KIND);
     GEO::Attribute<int> tri_vertex(out.vertices.attributes(), Attr::TRI_VERTEX);
     GEO::Attribute<int> tri_edge(out.vertices.attributes(), Attr::TRI_EDGE);
     GEO::Attribute<int> grid_vertex(out.vertices.attributes(), Attr::GRID_VERTEX);
@@ -100,7 +144,7 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
     GEO::Attribute<int> vertex_cell(out.vertices.attributes(), Attr::CELL);
 
     for (GEO::index_t v = 0; v < n_vertices; ++v) {
-        kind[v] = layout.vertex_kind[v];
+        kind[v] = as_unsigned(layout.vertex_kind[v]);
         tri_vertex[v] = layout.vertex_tri_vertex[v];
         tri_edge[v] = layout.vertex_tri_edge[v];
         grid_vertex[v] = layout.vertex_grid_vertex[v];
@@ -179,18 +223,18 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
         }
     }
 
-    GEO::Attribute<int> facet_tri_face_attr(out.facets.attributes(), Attr::TRI_FACE);
-    GEO::Attribute<int> facet_cell_attr(out.facets.attributes(), Attr::CELL);
+    GEO::Attribute<unsigned int> facet_tri_face_attr(out.facets.attributes(), Attr::TRI_FACE);
+    GEO::Attribute<unsigned int> facet_cell_attr(out.facets.attributes(), Attr::CELL);
     GEO::Attribute<int> facet_quad_face_attr(out.facets.attributes(), Attr::QUAD_FACE);
-    GEO::Attribute<int> facet_tri_faces_attr(out.facets.attributes(), Attr::TRI_FACES);
+    GEO::Attribute<unsigned int> facet_tri_faces_attr(out.facets.attributes(), Attr::TRI_FACES_NB);
     for (GEO::index_t f = 0; f < out.facets.nb(); ++f) {
-        facet_tri_face_attr[f] = facet_tri_face[f];
-        facet_cell_attr[f] = facet_cell[f];
+        facet_tri_face_attr[f] = as_unsigned(facet_tri_face[f]);
+        facet_cell_attr[f] = as_unsigned(facet_cell[f]);
         facet_quad_face_attr[f] = facet_quad_face[f];
-        facet_tri_faces_attr[f] = facet_tri_faces[f];
+        facet_tri_faces_attr[f] = as_unsigned(facet_tri_faces[f]);
     }
 
-    GEO::Attribute<int> corner_attr(out.facet_corners.attributes(), Attr::CORNER_QUAD_EDGE);
+    GEO::Attribute<int> corner_attr(out.facet_corners.attributes(), Attr::QUAD_EDGE);
     geo_assert(out.facet_corners.nb() == corner_quad_edge.size());
     for (GEO::index_t c = 0; c < out.facet_corners.nb(); ++c)
         corner_attr[c] = corner_quad_edge[c];
@@ -274,16 +318,17 @@ void GeogramBridge::toQuadMesh(const SurfaceLayout &layout, const QuadMesh &quad
 
     GEO::Attribute<int> facet_cell_attr(out.facets.attributes(), Attr::CELL);
     GEO::Attribute<int> facet_poly_face_attr(out.facets.attributes(), Attr::POLY_FACE);
-    GEO::Attribute<int> facet_quad_face_attr(out.facets.attributes(), Attr::QUAD_FACE);
-    GEO::Attribute<int> facet_tri_face_count_attr(out.facets.attributes(), Attr::TRI_FACE_COUNT);
+    GEO::Attribute<unsigned int> facet_quad_face_attr(out.facets.attributes(), Attr::QUAD_FACE);
+    GEO::Attribute<unsigned int> facet_tri_faces_nb_attr(out.facets.attributes(),
+            Attr::TRI_FACES_NB);
     for (GEO::index_t f = 0; f < out.facets.nb(); ++f) {
         const int cell = cell_of_facet[f];
         facet_cell_attr[f] = cell;
         facet_poly_face_attr[f] = cell >= 0 && (size_t)cell < layout.cell_poly_face.size()
                 ? layout.cell_poly_face[cell] : -1;
-        facet_quad_face_attr[f] = (int)f;
-        facet_tri_face_count_attr[f] = cell >= 0 && (size_t)cell < layout.cell_tri_faces.size()
-                ? (int)layout.cell_tri_faces[cell].size() : 0;
+        facet_quad_face_attr[f] = as_unsigned((int)f);
+        facet_tri_faces_nb_attr[f] = cell >= 0 && (size_t)cell < layout.cell_tri_faces.size()
+                ? as_unsigned((int)layout.cell_tri_faces[cell].size()) : 0u;
     }
 
     /*
@@ -331,7 +376,7 @@ void GeogramBridge::toQuadMesh(const SurfaceLayout &layout, const QuadMesh &quad
     }
 
     GEO::Attribute<int> edge_quad_edge_attr(out.edges.attributes(), Attr::QUAD_EDGE);
-    GEO::Attribute<int> edge_border_attr(out.edges.attributes(), Attr::BORDER);
+    GEO::Attribute<unsigned int> edge_border_attr(out.edges.attributes(), Attr::BORDER);
     for (GEO::index_t e = 0; e < out.edges.nb(); ++e) {
         int q = -1;
         const std::vector<int> &incident = facets_of_edge[e];
@@ -342,7 +387,7 @@ void GeogramBridge::toQuadMesh(const SurfaceLayout &layout, const QuadMesh &quad
             if (it != quad_edge_of_facet_pair.end()) q = it->second;
         }
         edge_quad_edge_attr[e] = q;
-        edge_border_attr[e] = (q < 0) ? 1 : 0;
+        edge_border_attr[e] = (q < 0) ? 1u : 0u;
     }
 }
 

@@ -38,53 +38,52 @@ namespace QEx {
  * the result can be written to any format geogram's mesh IO supports
  * (.geogram, .mesh, .obj, .ply, .stl, ...) without losing the information.
  *
- * Two meshes are provided:
+ * Two meshes are provided. The attribute names are short on purpose: the element
+ * an attribute belongs to (vertex, edge, facet, facet corner) is part of its
+ * identity, both in memory and in a geogram file, where the attributes are
+ * grouped per element type. An attribute that can be "not there" is an `int`
+ * holding -1; attributes that always have a value are `unsigned int`.
  *
  * @par toRefinedMesh() - the polygon mesh that is a subdivision of the input
- *      triangle mesh (cut along all quad edge polylines). Attributes:
+ *      triangle mesh (cut along all quad edge polylines):
  *
- *      vertices:
- *      - `qex_kind`            0 = triangle mesh vertex, 1 = point inserted on a
- *                              triangle mesh edge, 2 = grid vertex
- *      - `qex_tri_vertex`      index of the triangle mesh vertex, else -1
- *      - `qex_tri_edge`        index of the triangle mesh edge a point was
- *                              inserted on, else -1
- *      - `qex_grid_vertex`     index of the grid vertex, else -1
- *      - `qex_quad_edge`       quad edge the vertex belongs to, else -1
- *      - `qex_quad_edge_step`  position of the vertex along that quad edge's
- *                              polyline, else -1
- *      - `qex_cell`            most frequent cell of the incident faces, else -1
+ *      | element      | attribute       | type         | meaning                                   |
+ *      |--------------|-----------------|--------------|-------------------------------------------|
+ *      | vertex       | `kind`          | unsigned int | 0 = triangle vertex, 1 = point on a        |
+ *      |              |                 |              | triangle edge, 2 = grid vertex             |
+ *      | vertex       | `tri_vertex`    | int          | triangle mesh vertex, -1                   |
+ *      | vertex       | `tri_edge`      | int          | triangle mesh edge, -1                     |
+ *      | vertex       | `grid_vertex`   | int          | grid vertex, -1                            |
+ *      | vertex       | `cell`          | int          | an incident cell, -1                       |
+ *      | vertex       | `quad_edge`     | int          | quad edge the vertex lies on, -1           |
+ *      | vertex       | `quad_edge_step`| int          | position on its polyline, -1               |
+ *      | edge         | `quad_edge`     | int          | quad edge the edge lies on, -1             |
+ *      | edge         | `tri_edge`      | int          | triangle mesh edge, -1                     |
+ *      | facet        | `tri_face`      | unsigned int | triangle mesh face the facet is part of    |
+ *      | facet        | `cell`          | unsigned int | cell (region) the facet belongs to         |
+ *      | facet        | `quad_face`     | int          | quad mesh face of that cell, -1 if none    |
+ *      | facet        | `tri_faces_nb`  | unsigned int | triangle faces covered by the cell         |
+ *      | facet corner | `quad_edge`     | int          | quad edge of the edge starting here, -1    |
  *
- *      facets:
- *      - `qex_tri_face`        triangle mesh face this facet is part of
- *      - `qex_cell`            cell (== face of the extracted quad mesh) the
- *                              facet belongs to, -1 inside the extractor's holes
- *      - `qex_quad_face`       face of the final quad mesh that cell maps to, -1
- *      - `qex_tri_faces`       number of triangle mesh faces covered by the cell
+ *      `cell` is a region of the surface partition: all facets of a cell form one
+ *      patch of the triangle mesh, and `tri_faces_nb` is the number of triangle
+ *      mesh faces that patch covers (i.e. the number of distinct `tri_face`
+ *      values in it). A cell inside one of the extractor's holes has no quad mesh
+ *      face, which `quad_face` reports as -1.
  *
- *      facet corners (one per edge of a facet):
- *      - `qex_corner_quad_edge`  quad edge the edge starting at this corner lies
- *                                on, -1 if the edge is not part of a quad edge
+ *      The polyline of a quad edge *is* the set of edges carrying that
+ *      `quad_edge`; its vertices, ordered by `quad_edge_step`, are the polyline.
  *
- *      edges:
- *      - `qex_quad_edge`       quad edge this edge lies on, -1 if none. Together
- *                              with `qex_quad_edge_step` this *is* the polyline
- *                              of a quad edge: its vertices are exactly the
- *                              vertices carrying that quad edge index, ordered by
- *                              `qex_quad_edge_step`.
- *      - `qex_tri_edge`        triangle mesh edge this edge lies on, else -1
+ * @par toQuadMesh() - the extracted quad mesh (one face per cell):
  *
- * @par toQuadMesh() - the extracted quad mesh (one face per cell). Attributes:
- *
- *      facets:
- *      - `qex_cell`            cell index (== face of the poly mesh before merging)
- *      - `qex_poly_face`       face of the poly mesh before merging
- *      - `qex_quad_face`       the facet's own index (identity, kept for symmetry)
- *      - `qex_tri_face_count`  number of triangle mesh faces the cell covers
- *
- *      edges:
- *      - `qex_quad_edge`       index of the quad edge (see SurfaceLayout::quad_edges)
- *      - `qex_border`          1 if this quad edge borders a hole/ the boundary
+ *      | element   | attribute      | type         | meaning                                    |
+ *      |-----------|----------------|--------------|--------------------------------------------|
+ *      | facet     | `cell`         | int          | the cell of this face, -1                  |
+ *      | facet     | `poly_face`    | int          | poly mesh face before merging, -1          |
+ *      | facet     | `quad_face`    | unsigned int | the facet's own index (identity)           |
+ *      | facet     | `tri_faces_nb` | unsigned int | triangle faces covered by the cell         |
+ *      | edge      | `quad_edge`    | int          | the quad edge (with its polyline), -1      |
+ *      | edge      | `border`       | unsigned int | 1 if the edge has no quad edge             |
  *
  * @see QEx::SurfaceLayout, QEx::extractQuadMeshWithLayout
  */
