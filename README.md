@@ -1,15 +1,15 @@
 libQEx – A Robust Quad Mesh Extractor
 ======
 
-| Input (tri) | Output (quad) | Output (poly) |
+| Input (tri) | Output (quad) | Output (complex) |
 | :---: | :---: | :---: |
-| <img src="./assets/input.png"> | <img src="./assets/quad.png"> | <img src="./assets/poly.png"> |
+| <img src="./assets/input.png"> | <img src="./assets/quad.png"> | <img src="./assets/complex.png"> |
 
 ## Changes compared to the original libQEx
 
 This is a fork of the original `libQEx`: the extraction algorithm itself is untouched,
 but the build system and the API surface around it were reworked, and the **quad layout
-that the extractor computes internally is now exposed** as a polygonal mesh.
+that the extractor computes internally is now exposed** as an embedded cell complex.
 
 ### Dependency and build refactoring
 
@@ -37,12 +37,12 @@ that the extractor computes internally is now exposed** as a polygonal mesh.
   transfers the per-halfedge local UVs (it used to be a `TODO`, which left the local UV
   property of rebuilt faces uninitialised after `mergePolyToQuad()`).
 
-### Polymesh / quad layout support (new)
+### Embedded cell complex / quad layout support (new)
 
 While extracting, QEx traces every quad edge through the triangle mesh. Those traces are
-now recorded, which makes the quad layout available as a genuine **subdivision of the
-triangle mesh** — the “polymesh”, i.e. the triangle mesh cut along all quad edge
-polylines — together with
+now recorded, which makes the quad layout available as a genuine
+**embedded cell complex** — the triangle mesh cut along all quad edge polylines
+into cells — together with
 
 * the **quad edge polylines** on the triangle mesh surface (one chain of points per quad edge),
 * the **correspondence** between quad mesh faces, cells and triangle mesh faces,
@@ -91,9 +91,8 @@ build/bin/qex --in <input.obj> --out <output.obj> [-v|--valences <file.vval>] [-
 
 `--out` and `--out-complex` also accept a directory, in which case the file names are derived
 from the input mesh (`<input>_quad.obj`, `<input>_complex.geogram`). `--out-complex` writes the
-embedded cell complex (the quad layout embedded in the triangle mesh, i.e. the polymesh
-described above) as a geogram mesh (with all attributes). Run
-`build/bin/qex --help` for the details.
+embedded cell complex described above (the quad layout embedded in the triangle mesh) as a
+geogram mesh (with all attributes). Run `build/bin/qex --help` for the details.
 
 ---
 
