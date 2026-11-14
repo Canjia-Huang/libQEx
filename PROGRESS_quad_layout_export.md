@@ -193,7 +193,7 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 - 走 submodule 时：`set(BUILD_APPS OFF)`、`set(OPENMESH_DOCS OFF)`，用 `add_subdirectory(third_party/OpenMesh EXCLUDE_FROM_ALL)`；OpenMesh 的 CMake 本身支持作为子项目（非顶层时会跳过 Unittests，并把 `OPENMESH_FOUND / OPENMESH_LIBRARIES / OPENMESH_INCLUDE_DIRS` 以 `PARENT_SCOPE` 导出），所以仓库其余部分不用改。同时用 `CMAKE_SUPPRESS_DEVELOPER_WARNINGS` 临时屏蔽 OpenMesh 自己 cmake 模块的 dev warning。
 - **坑（重要）**：不要链接 `OpenMeshCoreStatic`/`OpenMeshToolsStatic`。OpenMesh 的 mesh IO（OBJ 读写）模块是靠静态初始化自注册的，静态库归档里没人引用的目标文件会被链接器丢掉，运行时报
   `[OpenMesh::IO::_IOManager_] No reading modules available!` 且读 OBJ 直接失败。正确做法是链接**共享库** `OpenMeshCore`/`OpenMeshTools`（它们的 install_name 是 `@rpath/libOpenMeshCore.11.0.dylib`），并把 `${QEX_LIB_DIR}`（构建目录的 `lib/`，OpenMesh 的库就落在那里）加进 `CMAKE_BUILD_RPATH`/`CMAKE_INSTALL_RPATH`（APPLE 分支已处理）。改用共享库后顺带也消除了重复静态库的链接警告。
-- 实测：全新 build 目录 `cmake -S . -B /tmp/x && cmake --build /tmp/x -j8` 自动编译 bundled OpenMesh 并产出 `bin/{qex,cmdline_tool,export_layout,export_geogram,demo_minimal_c}`；`qex --in duck_miq_8_param.obj --out t.obj --out-poly t_poly.geogram` 输出与 Homebrew 版**字节数完全一致**（18573 / 761528）；`-DQEX_OPENMESH=SYSTEM` 仍解析到 `/opt/homebrew/lib/libOpenMeshCore.dylib`。
+- 实测：全新 build 目录 `cmake -S . -B /tmp/x && cmake --build /tmp/x -j8` 自动编译 bundled OpenMesh 并产出 `bin/{qex,cmdline_tool,export_layout,export_geogram,demo_minimal_c}`；`qex --in duck_miq_8_param.obj --out t.obj --out-complex t_complex.geogram` 输出与 Homebrew 版**字节数完全一致**（18573 / 761528）；`-DQEX_OPENMESH=SYSTEM` 仍解析到 `/opt/homebrew/lib/libOpenMeshCore.dylib`。
 
 ---
 
@@ -218,20 +218,20 @@ qex [OPTIONS]
   -i,--in FILE         带 face-based UV 的三角网格（OBJ，必填）
   -o,--out PATH        四边形网格输出（OBJ，必填）
   -v,--valences FILE   VVAL 顶点价数（可选）
-  --out-poly PATH      把 polymesh 存成 geogram 网格（可选）
+  --out-complex PATH   把 embedded cell complex 存成 geogram 网格（可选）
   -h,--help            CLI11 自带
   （不接受位置参数；所有输入输出都走选项）
 ```
 
-- `--out` / `--out-poly` 给的是**目录**时，自动用输入文件名推导：`<输入名（去扩展名）>_quad.obj` / `<输入名（去扩展名）>_poly.geogram`（见 `main.cpp` 里的 `std::filesystem::is_directory` 分支；注意结果路径会拼成 `dir//name` 这种双斜杠，能用但不美观）。
-- `--out-poly PATH` 直接保存 **polymesh**（把三角网格沿所有 Q-edge polyline 切开后的多边形网格，即布局在三角网格上的剖分）为 `GEO::Mesh` 写到该路径；**不写 quad mesh 的 geogram**。所有信息仍在 mesh attributes 里（`QEx::GeogramBridge::toRefinedMesh`）：
+- `--out` / `--out-complex` 给的是**目录**时，自动用输入文件名推导：`<输入名（去扩展名）>_quad.obj` / `<输入名（去扩展名）>_complex.geogram`（见 `main.cpp` 里的 `std::filesystem::is_directory` 分支；注意结果路径会拼成 `dir//name` 这种双斜杠，能用但不美观）。
+- `--out-complex PATH` 直接保存 **embedded cell complex**（quad layout 嵌入三角网格后得到的胞腔复形，形如把三角网格沿所有 Q-edge polyline 切开后的多边形网格，即布局在三角网格上的剖分）为 `GEO::Mesh` 写到该路径；**不写 quad mesh 的 geogram**。所有信息仍在 mesh attributes 里（`QEx::GeogramBridge::toRefinedMesh`）：
   - 顶点：`kind`、`tri_vertex`、`tri_edge`、`grid_vertex`、`cell`、`quad_edge`、`quad_edge_step`
   - 边：`quad_edge`、`tri_edge`
   - 面：`tri_face`、`cell`、`quad_face`、`tri_faces_nb`
   - 面角：`quad_edge`（详见 §9 的完整表格）
-- `--out-poly` 只在构建时找到 geogram 才存在；否则该选项以明确信息报错（编译期 `QEX_HAVE_GEOGRAM`）。
+- `--out-complex` 只在构建时找到 geogram 才存在；否则该选项以明确信息报错（编译期 `QEX_HAVE_GEOGRAM`）。
 
-**help 的 description / footer**（写在 `main.cpp` 顶部）：description 说明「基于原始 libQEx 的 cmdline（cmdline_tool），额外增加了 polymesh 的导出」；footer 为
+**help 的 description / footer**（写在 `main.cpp` 顶部）：description 说明「基于原始 libQEx 的 cmdline（cmdline_tool），额外增加了 embedded cell complex 的导出」；footer 为
 
 ```
 SUPPORT:
@@ -239,14 +239,14 @@ SUPPORT:
  - For bug reports or requirements, please contact: Canjia Huang <huangcanjia0214@gmail.com>
 ```
 
-> CLI11 默认会把 footer 当段落重排（吃掉行首缩进、按 80 列折行），所以代码里用 `dynamic_cast<CLI::Formatter *>(app.get_formatter().get())->enable_footer_formatting(false)` 关掉重排，footer 才能逐字输出。description 里引用选项名时注意与实际选项一致（现在是 `--out-poly`）。
+> CLI11 默认会把 footer 当段落重排（吃掉行首缩进、按 80 列折行），所以代码里用 `dynamic_cast<CLI::Formatter *>(app.get_formatter().get())->enable_footer_formatting(false)` 关掉重排，footer 才能逐字输出。description 里引用选项名时注意与实际选项一致（现在是 `--out-complex`）。
 
 退出码：0 正常；2 读输入失败；3 输入没有 halfedge UV；4 VVAL 非法；5 写文件失败；解析错误沿用 CLI11 约定（106 缺必填选项、缺值/多余参数等亦非 0）。
 
 实测（duck_miq_8_param.obj）：
-- `qex -i in.obj -o out.obj --out-poly poly.geogram` → out.obj + poly.geogram（17336 v / 44580 e / 27246 f，554 条 Q-edge 的 polyline 都在里面），**不产生 quad mesh 的 geogram**；
-- 用 geogram 的 `mesh_load` 读回 `poly.geogram`：顶点 7 类属性 + 边 2 类 + 面 4 类 + 面角 1 类全部保留；
-- `-o odir/ --out-poly odir/` → `odir/duck_miq_8_param_quad.obj` + `odir/duck_miq_8_param_poly.geogram`；
+- `qex -i in.obj -o out.obj --out-complex complex.geogram` → out.obj + complex.geogram（17336 v / 44580 e / 27246 f，554 条 Q-edge 的 polyline 都在里面），**不产生 quad mesh 的 geogram**；
+- 用 geogram 的 `mesh_load` 读回 `complex.geogram`：顶点 7 类属性 + 边 2 类 + 面 4 类 + 面角 1 类全部保留；
+- `-o odir/ --out-complex odir/` → `odir/duck_miq_8_param_quad.obj` + `odir/duck_miq_8_param_complex.geogram`；
 - 传位置参数会被拒绝（退出码 106）。
 
 > 需要 `_refined.obj` / `_polylines.obj` / `_cells.obj` / `_layout.txt` 或 quad mesh 的 geogram 文件时，用保留的 `bin/export_layout` 与 `bin/export_geogram`。

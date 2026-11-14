@@ -86,12 +86,13 @@ Executables go to `build/bin`, libraries to `build/lib`.
 partly):
 
 ```bash
-build/bin/qex --in <input.obj> --out <output.obj> [-v|--valences <file.vval>] [--out-poly <file>]
+build/bin/qex --in <input.obj> --out <output.obj> [-v|--valences <file.vval>] [--out-complex <file>]
 ```
 
-`--out` and `--out-poly` also accept a directory, in which case the file names are derived
-from the input mesh (`<input>_quad.obj`, `<input>_poly.geogram`). `--out-poly` writes the
-polymesh described above as a geogram mesh (with all attributes). Run
+`--out` and `--out-complex` also accept a directory, in which case the file names are derived
+from the input mesh (`<input>_quad.obj`, `<input>_complex.geogram`). `--out-complex` writes the
+embedded cell complex (the quad layout embedded in the triangle mesh, i.e. the polymesh
+described above) as a geogram mesh (with all attributes). Run
 `build/bin/qex --help` for the details.
 
 ---

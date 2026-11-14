@@ -3,16 +3,17 @@
  *
  * Reads a triangle mesh with a (relaxed) integer grid map from an OBJ file,
  * extracts the quad mesh and writes it to another OBJ file. Optionally it also
- * stores the meshes in geogram format, where every piece of information (the
- * correspondence, the quad edge polylines, ...) is kept in mesh attributes.
+ * stores the embedded cell complex in geogram format, where every piece of
+ * information (the correspondence, the quad edge polylines, ...) is kept in
+ * mesh attributes.
  *
  * Command line:
  *
- *   qex <input.obj> <output.obj> [-v|--valences <file.vval>] [--geogram <file>]
+ *   qex <input.obj> <output.obj> [-v|--valences <file.vval>] [--out-complex <file>]
  *
- * With --geogram the polygonal mesh - the triangle mesh cut along all quad edge
- * polylines, i.e. the quad layout as a subdivision of the triangle mesh - is
- * stored as a GEO::Mesh in the given file.
+ * With --out-complex the embedded cell complex - the quad layout embedded in the
+ * triangle mesh, i.e. the triangle mesh cut along all quad edge polylines into
+ * cells - is stored as a GEO::Mesh in the given file.
  *
  * @see QEx::GeogramBridge for the attributes stored in that mesh.
  */
@@ -70,9 +71,9 @@ int main(int argc, char **argv) {
     CLI::App app(
             "qex - extract a quad mesh from a triangle mesh with a relaxed integer grid map\n"
             "Based on the original libQEx command line tool (cmdline_tool): it extracts the quad "
-            "mesh exactly as before and additionally exports the polymesh - the quad layout as a "
-            "subdivision of the triangle mesh, i.e. the triangle mesh cut along all quad edge "
-            "polylines - in geogram format (see --out-poly).");
+            "mesh exactly as before and additionally exports the embedded cell complex - the "
+            "quad layout embedded in the triangle mesh, i.e. the triangle mesh cut along all "
+            "quad edge polylines into cells - in geogram format (see --out-complex).");
     /*
      * Print the footer verbatim: CLI11's paragraph formatting would re-wrap it and
      * strip the indentation.
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
     std::string inputFile;
     std::string outputFile;
     std::string valenceFile;
-    std::string polyFile;
+    std::string complexFile;
 
     app.add_option("--in,-i", inputFile, "Triangle mesh with face based UVs (OBJ)")
             ->required()
@@ -97,15 +98,16 @@ int main(int argc, char **argv) {
             "Vertex valences in VVAL format (optional, helps in ambiguous cases)")
             ->check(CLI::ExistingFile);
 #ifdef QEX_HAVE_GEOGRAM
-    app.add_option("--out-poly,--o-poly", polyFile,
-            "Store the polygonal mesh (the quad layout as a subdivision of the triangle mesh) "
-            "in this file, in geogram's mesh format with all information in mesh attributes");
+    app.add_option("--out-complex,--o-complex", complexFile,
+            "Store the embedded cell complex (the quad layout embedded in the triangle mesh: "
+            "the triangle mesh cut along all quad edge polylines into cells) in this file, "
+            "using geogram's mesh format with all information in mesh attributes");
 #else
-    app.add_option_function<std::string>("--out-poly,--o-poly", [](const std::string &) {
+    app.add_option_function<std::string>("--out-complex,--o-complex", [](const std::string &) {
             throw CLI::RuntimeError(
                     "QEx was built without geogram support (configure with -DGEOGRAM_ROOT=... or "
                     "-DQEX_WITH_GEOGRAM=ON)", 1);
-        }, "Store the polygonal mesh in geogram format (not available in this build)");
+        }, "Store the embedded cell complex in geogram format (not available in this build)");
 #endif
 
     CLI11_PARSE(app, argc, argv);
@@ -123,8 +125,8 @@ int main(int argc, char **argv) {
             outputFile = outputFile + "/" + model_name + "_quad.obj";
         }
     }
-    if (!polyFile.empty()) {
-        if (std::filesystem::is_directory(polyFile)) {
+    if (!complexFile.empty()) {
+        if (std::filesystem::is_directory(complexFile)) {
             std::string model_name;
 
             const std::filesystem::path inPath(inputFile);
@@ -133,7 +135,7 @@ int main(int argc, char **argv) {
                 pos != std::string::npos)
                 model_name = filename_w_ex.substr(0, pos);
 
-            polyFile = polyFile + "/" + model_name + "_poly.geogram";
+            complexFile = complexFile + "/" + model_name + "_complex.geogram";
         }
     }
 
@@ -179,7 +181,7 @@ int main(int argc, char **argv) {
     QuadMesh quadMesh;
     SurfaceLayout layout;
     extractQuadMeshWithLayout(&triMesh, &uvVector, valencesPtr, &quadMesh,
-            polyFile.empty() ? 0 : &layout, 0, true);
+            complexFile.empty() ? 0 : &layout, 0, true);
 
     if (!outputFile.empty()) {
         if (!OpenMesh::IO::write_mesh(quadMesh, outputFile, OpenMesh::IO::Options::Default, 12)) {
@@ -191,15 +193,16 @@ int main(int argc, char **argv) {
     }
 
 #ifdef QEX_HAVE_GEOGRAM
-    if (!polyFile.empty()) {
-        if (!GeogramBridge::saveRefinedMesh(layout, polyFile)) {
-            std::cerr << "Could not write " << polyFile << std::endl;
+    if (!complexFile.empty()) {
+        if (!GeogramBridge::saveRefinedMesh(layout, complexFile)) {
+            std::cerr << "Could not write " << complexFile << std::endl;
             return 5;
         }
-        std::cout << "wrote " << polyFile << " (polygonal mesh: the triangle mesh cut along all "
+        std::cout << "wrote " << complexFile
+                  << " (embedded cell complex: the triangle mesh cut along all "
                   << layout.quad_edges.size() << " quad edge polylines, "
-                  << layout.face_vertices.size() << " faces, all information in mesh attributes)"
-                  << std::endl;
+                  << layout.face_vertices.size()
+                  << " cells, all information in mesh attributes)" << std::endl;
     }
 #endif
 
