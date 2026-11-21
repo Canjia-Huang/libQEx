@@ -161,6 +161,8 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 | | `cell` | int | 相邻的某个格胞，否则 -1 |
 | | `quad_edge` / `quad_edge_step` | int | 属于哪条 Q-edge 及在 polyline 上的序号，否则 -1 |
 | refined 边 | `quad_edge` / `tri_edge` | int | 落在哪条 Q-edge / 哪条三角网格边上，否则 -1 |
+| | `grid` | unsigned int | 1 = 该边落在整数网格线上（即某条 Q-edge polyline 的一段） |
+| | `grid_axis` | int | 该网格线的变化坐标轴：0 = u 变，1 = v 变，-1 = 不在网格线上 |
 | refined 面 | `tri_face` | unsigned int | 来自哪个原三角面 |
 | | `cell` | unsigned int | 属于哪个格胞（洞内也有值） |
 | | `quad_face` | int | 该格胞对应的最终 quad mesh 面，**-1 = 该格胞没有面（洞）** |
@@ -175,6 +177,10 @@ cmake --build "/Users/canjia/libQEx/cmake-build-debug-系统" --target export_la
 关于类型在文件里的写法：`unsigned int` 与 geogram 自己的 `index_t`（默认为 `unsigned int`）、`int` 与 `signed_index_t` 是同一底层类型，geogram 的类型注册表以 `index_t` / `signed_index_t` 作为规范名，所以在 `.geogram` 文件里会看到 `index_t`（4 字节，无符号）与 `signed_index_t`（4 字节，有符号）。用 `unsigned int` 而非 `index_t` 的好处是：即使 geogram 用 64 位索引构建（`geo_index_t = uint64_t`），这些属性仍是 32 位。
 
 **polyline 的恢复方式**：一条 Q-edge 的 polyline = refined 网格上带同一 `quad_edge` 的边序列，顶点顺序由 `quad_edge_step` 给出（无损，不需要变长属性）。`cell → 原三角面` 的对应可由 refined 面的 `cell` 反查。
+
+**`grid` / `grid_axis` 的获取方式**（与 `/Users/canjia/libHexEx` 的 embedded cell complex 同名同义）：`grid = 1` 表示该 refined 边落在整数网格线上，`grid_axis` 是这条网格线变化的 uv 轴（`0` = u 变、`1` = v 变，不在网格线上为 `-1`）。QEx 的复形只沿 Q-edge polyline 切，所以网格线就是 polyline 的每一段；`SurfaceLayout::QuadEdge::pieces[i]` 正好对应 polyline 顶点 `i → i+1` 的段，一段的 uv 端点里一个坐标恒定、另一个变化，变化的坐标轴就是 `grid_axis`。注意要**按边**而不是按整条 Q-edge 记录：跨三角面时 uv frame 可能旋转，同一条 Q-edge 的不同段会出现 u/v 互换（实测 duck 554 条 Q-edge 中有 49 条如此）。退化段（uv 端点重合）没有方向，记为 `grid = 0`、`grid_axis = -1`。
+
+实测（`.geogram` 读回）：duck_miq_8 的 complex 共 44580 条边，其中 `grid = 1` 的 7777 条（axis0 3910 / axis1 3867），全部与 `quad_edge >= 0` 的边一致；fandisk 41174 条边中 11311 条 `grid = 1`（5272 / 6039，另有 666 个 uv 退化段，未出现在导出的边上）；botijo_qc 81024 条边中 19135 条 `grid = 1`（9808 / 9327）。
 
 ### 工具与验证
 
@@ -226,7 +232,7 @@ qex [OPTIONS]
 - `--out` / `--out-complex` 给的是**目录**时，自动用输入文件名推导：`<输入名（去扩展名）>_quad.obj` / `<输入名（去扩展名）>_complex.geogram`（见 `main.cpp` 里的 `std::filesystem::is_directory` 分支；注意结果路径会拼成 `dir//name` 这种双斜杠，能用但不美观）。
 - `--out-complex PATH` 直接保存 **embedded cell complex**（quad layout 嵌入三角网格后得到的胞腔复形，形如把三角网格沿所有 Q-edge polyline 切开后的多边形网格，即布局在三角网格上的剖分）为 `GEO::Mesh` 写到该路径；**不写 quad mesh 的 geogram**。所有信息仍在 mesh attributes 里（`QEx::GeogramBridge::toRefinedMesh`）：
   - 顶点：`kind`、`tri_vertex`、`tri_edge`、`grid_vertex`、`cell`、`quad_edge`、`quad_edge_step`
-  - 边：`quad_edge`、`tri_edge`
+  - 边：`quad_edge`、`tri_edge`、`grid`、`grid_axis`
   - 面：`tri_face`、`cell`、`quad_face`、`tri_faces_nb`
   - 面角：`quad_edge`（详见 §9 的完整表格）
 - `--out-complex` 只在构建时找到 geogram 才存在；否则该选项以明确信息报错（编译期 `QEX_HAVE_GEOGRAM`）。

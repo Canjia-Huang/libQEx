@@ -59,6 +59,9 @@ namespace QEx {
  *      | vertex       | `quad_edge_step`| int          | position on its polyline, -1               |
  *      | edge         | `quad_edge`     | int          | quad edge the edge lies on, -1             |
  *      | edge         | `tri_edge`      | int          | triangle mesh edge, -1                     |
+ *      | edge         | `grid`          | unsigned int | 1 if the edge lies on an integer grid line |
+ *      | edge         | `grid_axis`     | int          | varying uv axis of that grid line          |
+ *      |              |                 |              | (0 = u, 1 = v), -1 if not on a grid line   |
  *      | facet        | `tri_face`      | unsigned int | triangle mesh face the facet is part of    |
  *      | facet        | `cell`          | unsigned int | cell (region) the facet belongs to         |
  *      | facet        | `quad_face`     | int          | quad mesh face of that cell, -1 if none    |

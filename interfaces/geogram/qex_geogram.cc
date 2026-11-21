@@ -27,6 +27,7 @@
 #include <geogram/mesh/mesh.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <sstream>
@@ -59,6 +60,9 @@ namespace {
  * | vertex        | quad_edge_step    | int          | position on that quad edge's polyline, -1       |
  * | edge          | quad_edge         | int          | quad edge the edge lies on, -1                  |
  * | edge          | tri_edge          | int          | triangle mesh edge the edge lies on, -1         |
+ * | edge          | grid              | unsigned int | 1 if the edge lies on an integer grid line      |
+ * | edge          | grid_axis         | int          | varying uv axis of that grid line (0 = u,       |
+ * |               |                   |              | 1 = v), -1 if the edge is not on a grid line    |
  * | facet         | tri_face          | unsigned int | triangle mesh face                              |
  * | facet         | cell              | unsigned int | cell (region) the facet belongs to              |
  * | facet         | quad_face         | int          | quad mesh face of that cell, -1 if it has none  |
@@ -79,6 +83,8 @@ const char *const GRID_VERTEX = "grid_vertex";
 const char *const CELL = "cell";
 const char *const QUAD_EDGE = "quad_edge";
 const char *const QUAD_EDGE_STEP = "quad_edge_step";
+const char *const GRID = "grid";
+const char *const GRID_AXIS = "grid_axis";
 const char *const TRI_FACE = "tri_face";
 const char *const QUAD_FACE = "quad_face";
 const char *const TRI_FACES_NB = "tri_faces_nb";
@@ -104,6 +110,34 @@ inline unsigned int as_unsigned(int v) {
  */
 inline std::pair<int, int> edge_key(int a, int b) {
     return std::make_pair(std::min(a, b), std::max(a, b));
+}
+
+/**
+ * @brief The axis along which a quad edge piece runs, if it lies on a grid line.
+ *
+ * A piece of a quad edge lies on an integer grid line iff its uv segment is
+ * axis aligned in the triangle's uv frame and the other (constant) uv coordinate
+ * is an integer. Exactly like an edge of HexEx's embedded cell complex, such a
+ * piece has one varying axis and two constant, integer coordinates in 3d; on
+ * the surface only one coordinate is constant, and that is the coordinate the
+ * line is aligned with.
+ *
+ * @return 0 if u varies, 1 if v varies, -1 if the piece is not on a grid line
+ *         (in particular for degenerate pieces, whose uv endpoints coincide).
+ */
+int grid_axis_of_piece(const SurfaceLayout::Piece &piece) {
+    static const double EPS = 1e-4;
+    const OpenMesh::Vec2d delta = piece.uv_out - piece.uv_in;
+    static const double DEGENERATE_EPS = 1e-12;
+    if (std::fabs(delta[0]) <= DEGENERATE_EPS && std::fabs(delta[1]) <= DEGENERATE_EPS)
+        return -1; /* degenerate: no direction */
+    const double u = 0.5 * (piece.uv_in[0] + piece.uv_out[0]);
+    const double v = 0.5 * (piece.uv_in[1] + piece.uv_out[1]);
+    if (std::fabs(delta[1]) <= EPS && std::fabs(v - std::round(v)) <= EPS)
+        return 0;
+    if (std::fabs(delta[0]) <= EPS && std::fabs(u - std::round(u)) <= EPS)
+        return 1;
+    return -1;
 }
 
 } // namespace
@@ -188,13 +222,26 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
 
     /* refined mesh edge (as a sorted vertex pair) -> quad edge */
     std::map<std::pair<int, int>, int> quad_edge_of_edge;
+    /*
+     * Refined mesh edge -> axis of the grid line it lies on, or -1.
+     *
+     * The polyline of a quad edge consists of the straight pieces that the
+     * extractor traced through the triangles; piece i runs from vertex i to
+     * vertex i + 1, so the axis of the grid line is known per refined edge
+     * (and not just per quad edge: across a triangle edge the uv frame may be
+     * rotated, which swaps u and v).
+     */
+    std::map<std::pair<int, int>, int> grid_axis_of_edge;
     for (size_t q = 0; q < layout.quad_edges.size(); ++q) {
         const SurfaceLayout::QuadEdge &qe = layout.quad_edges[q];
         for (size_t i = 0; i + 1 < qe.vertices.size(); ++i) {
             const int a = qe.vertices[i], b = qe.vertices[i + 1];
             if (a < 0 || b < 0 || a == b) continue;
             const std::pair<int, int> key = edge_key(a, b);
-            if (!quad_edge_of_edge.count(key)) quad_edge_of_edge[key] = (int)q;
+            if (quad_edge_of_edge.count(key)) continue;
+            quad_edge_of_edge[key] = (int)q;
+            grid_axis_of_edge[key] = i < qe.pieces.size()
+                    ? grid_axis_of_piece(qe.pieces[i]) : -1;
         }
     }
 
@@ -263,6 +310,8 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
 
     GEO::Attribute<int> edge_quad_edge_attr(out.edges.attributes(), Attr::QUAD_EDGE);
     GEO::Attribute<int> edge_tri_edge_attr(out.edges.attributes(), Attr::TRI_EDGE);
+    GEO::Attribute<unsigned int> edge_grid_attr(out.edges.attributes(), Attr::GRID);
+    GEO::Attribute<int> edge_grid_axis_attr(out.edges.attributes(), Attr::GRID_AXIS);
     for (GEO::index_t e = 0; e < out.edges.nb(); ++e) {
         edge_quad_edge_attr[e] = edge_quad_edge[e];
         /* a triangle mesh edge is identified by the refined vertices that are its
@@ -272,6 +321,13 @@ void GeogramBridge::toRefinedMesh(const SurfaceLayout &layout, GEO::Mesh &out) {
         if (layout.vertex_tri_edge[v0] >= 0 && layout.vertex_tri_edge[v0] == layout.vertex_tri_edge[v1])
             te = layout.vertex_tri_edge[v0];
         edge_tri_edge_attr[e] = te;
+        /* the edge lies on an integer grid line iff it is a piece of a quad edge
+         * polyline with a well defined direction; degenerate pieces have none */
+        const std::map<std::pair<int, int>, int>::const_iterator axis_it =
+                grid_axis_of_edge.find(edge_key((int)v0, (int)v1));
+        const int axis = axis_it == grid_axis_of_edge.end() ? -1 : axis_it->second;
+        edge_grid_axis_attr[e] = axis;
+        edge_grid_attr[e] = axis >= 0 ? 1u : 0u;
     }
 
     /* ---------------- vertex cell (majority of the incident facets) ---------------- */

@@ -53,8 +53,8 @@ Writers: `demo/export_layout` (OBJ + correspondence table) and the `GeogramBridg
 (`toRefinedMesh()`, `toQuadMesh()`, `save()`), which stores *all* of the above in
 `GEO::Mesh` **attributes** (`kind`, `tri_vertex`, `tri_edge`, `grid_vertex`, `cell`,
 `tri_face`, `tri_faces_nb`, `quad_face`, `quad_edge`, `quad_edge_step`, `poly_face`,
-`border`), so exporting to `.geogram` loses nothing. Attributes that can be "not there"
-are `int` (holding -1), all others are `unsigned int`.
+`border`, `grid`, `grid_axis`), so exporting to `.geogram` loses nothing. Attributes
+that can be "not there" are `int` (holding -1), all others are `unsigned int`.
 
 Measurements and the verification protocol are documented in
 [`PROGRESS_quad_layout_export.md`](PROGRESS_quad_layout_export.md).

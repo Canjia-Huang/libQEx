@@ -36,6 +36,8 @@ const char *const ATTR_QUAD_EDGE = "quad_edge";
 const char *const ATTR_TRI_FACE = "tri_face";
 const char *const ATTR_TRI_FACES_NB = "tri_faces_nb";
 const char *const ATTR_QUAD_EDGE_STEP = "quad_edge_step";
+const char *const ATTR_GRID = "grid";
+const char *const ATTR_GRID_AXIS = "grid_axis";
 const char *const ATTR_BORDER = "border";
 
 int failures = 0;
@@ -237,6 +239,33 @@ int main(int argc, char **argv) {
                 if (qe[e] >= 0) ++marked;
             check(marked > 0, "refined mesh edges are marked with their quad edge",
                     std::to_string(marked) + " of " + std::to_string(refined_in.edges.nb()));
+        }
+    }
+
+    {
+        const bool have_grid = GEO::Attribute<unsigned int>::is_defined(
+                refined_in.edges.attributes(), ATTR_GRID);
+        const bool have_axis = GEO::Attribute<int>::is_defined(
+                refined_in.edges.attributes(), ATTR_GRID_AXIS);
+        check(have_grid && have_axis, "edge attributes grid / grid_axis are present");
+        if (have_grid && have_axis) {
+            const GEO::Attribute<unsigned int> grid(refined_in.edges.attributes(), ATTR_GRID);
+            const GEO::Attribute<int> axis(refined_in.edges.attributes(), ATTR_GRID_AXIS);
+            const GEO::Attribute<int> qe(refined_in.edges.attributes(), ATTR_QUAD_EDGE);
+            size_t n_grid = 0, n_axis[2] = {0, 0}, n_bad = 0;
+            for (GEO::index_t e = 0; e < refined_in.edges.nb(); ++e) {
+                if (grid[e]) {
+                    ++n_grid;
+                    if (axis[e] == 0 || axis[e] == 1) ++n_axis[axis[e]];
+                    if (qe[e] < 0) ++n_bad;
+                } else if (axis[e] != -1) {
+                    ++n_bad;
+                }
+            }
+            check(n_grid > 0 && n_bad == 0, "grid edges have an axis and a quad edge",
+                    std::to_string(n_grid) + " grid edges (axis 0: "
+                            + std::to_string(n_axis[0]) + ", axis 1: "
+                            + std::to_string(n_axis[1]) + ")");
         }
     }
 
